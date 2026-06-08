@@ -4,8 +4,9 @@ services:
     image: dnscheck:latest
     container_name: dnscheck
     restart: unless-stopped
-    volumes:
-      - ./probes.db:/app/probes.db
+    env_file: .env
+    extra_hosts:
+      - host.docker.internal:host-gateway
     networks:
       - web
 

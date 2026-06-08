@@ -1,5 +1,5 @@
 {
-  "name": "dnscheck-v2-backend",
+  "name": "dnscheck-backend",
   "version": "1.0.0",
   "private": true,
   "main": "src/index.js",
