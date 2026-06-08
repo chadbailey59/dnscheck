@@ -34,7 +34,8 @@ be less precise there.
 Each run generates a fresh anonymous contributor UUID and upload UUID. The upload
 UUID is used to ignore accidental duplicate rows from the same batch.
 
-If automatic ISP detection fails, set the provider explicitly:
+If automatic ISP detection fails, the probe publishes under `Other` using the
+system DNS resolver path. You can also set the provider explicitly:
 
 ```sh
 docker run --rm \
@@ -52,6 +53,7 @@ Supported provider labels are currently:
 - `Charter/Spectrum`
 - `CenturyLink/Lumen`
 - `Verizon/Level3`
+- `Other`
 
 Optional settings:
 

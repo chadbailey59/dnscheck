@@ -23,11 +23,12 @@ function runDig(args, timeoutMs) {
 
 async function probe(server, domain) {
   const start = Date.now();
+  const resolverArgs = server === 'default' ? [] : [`@${server}`];
   const { exitCode, stdout, stderr, timedOut } = await runDig(
     [
       '+tries=1', `+time=${TIMEOUT_SECS}`,
       '+noall', '+answer', '+authority', '+comments',
-      `@${server}`, domain, 'NS',
+      ...resolverArgs, domain, 'NS',
     ],
     (TIMEOUT_SECS + 2) * 1000,
   );

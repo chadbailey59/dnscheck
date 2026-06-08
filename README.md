@@ -13,7 +13,8 @@ Each run generates a fresh anonymous contributor UUID and upload UUID. The uploa
 includes those UUIDs and DNS probe results only; it does not include traceroute
 output, public hop IPs, source IP, or user agent.
 
-If ISP detection fails, run it with a provider override:
+If ISP detection fails, the probe publishes under `Other` using the system DNS
+resolver path. You can also run it with a provider override:
 
 ```sh
 docker run --rm --pull always --network host -e ISP_PROVIDER="AT&T" chadbailey59/dnscheck-contributor:latest
@@ -40,6 +41,7 @@ Supported provider labels:
 - `Charter/Spectrum`
 - `CenturyLink/Lumen`
 - `Verizon/Level3`
+- `Other`
 
 For local development:
 

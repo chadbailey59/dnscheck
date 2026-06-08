@@ -1,11 +1,11 @@
 'use strict';
 
-const dns = require('dns').promises;
+const dns = require('dns');
 const { randomUUID } = require('crypto');
 const { execFile } = require('child_process');
 const { ALL_DOMAINS } = require('./config');
 const { probe } = require('./poller');
-const { findResolverGroup, listProviderNames } = require('./ispResolvers');
+const { OTHER_PROVIDER, findResolverGroup, isOtherProvider, listProviderNames } = require('./ispResolvers');
 
 const DEFAULT_UPLOAD_URL = 'https://dnscheck.fun/api/probes';
 const UPLOAD_URL = process.env.DNSCHECK_UPLOAD_URL || process.env.UPLOAD_URL || DEFAULT_UPLOAD_URL;
@@ -80,7 +80,7 @@ function parseTraceEvidence(output) {
 async function reverseDns(ip) {
   try {
     const names = await Promise.race([
-      dns.reverse(ip),
+      dns.promises.reverse(ip),
       new Promise(resolve => setTimeout(() => resolve([]), 1500)),
     ]);
     return Array.isArray(names) ? names : [];
@@ -105,8 +105,38 @@ async function rdapEvidence(ip) {
   }
 }
 
+function normalizeResolverServer(server) {
+  const value = String(server ?? '').trim();
+  if (!value) return null;
+
+  const bracketMatch = /^\[([^\]]+)\](?::\d+)?$/.exec(value);
+  if (bracketMatch) return bracketMatch[1];
+
+  if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(value)) {
+    return value.replace(/:\d+$/, '');
+  }
+
+  return value;
+}
+
+function systemResolverServers() {
+  const servers = unique(dns.getServers().map(normalizeResolverServer));
+  return servers.length > 0 ? servers : ['default'];
+}
+
+function otherResolverGroup() {
+  return {
+    provider: OTHER_PROVIDER,
+    aliases: ['other'],
+    servers: systemResolverServers(),
+  };
+}
+
 async function discoverIsp() {
   if (process.env.ISP_PROVIDER) {
+    if (isOtherProvider(process.env.ISP_PROVIDER)) {
+      return { group: otherResolverGroup(), method: 'ISP_PROVIDER override', evidenceCount: 1 };
+    }
     const group = findResolverGroup(process.env.ISP_PROVIDER);
     return { group, method: 'ISP_PROVIDER override', evidenceCount: group ? 1 : 0 };
   }
@@ -125,7 +155,11 @@ async function discoverIsp() {
   }
 
   const group = findResolverGroup(evidence.join('\n'));
-  return { group, method: `traceroute ${TRACE_TARGET}`, evidenceCount: evidence.length };
+  return {
+    group: group ?? otherResolverGroup(),
+    method: group ? `traceroute ${TRACE_TARGET}` : `traceroute ${TRACE_TARGET} fallback`,
+    evidenceCount: evidence.length,
+  };
 }
 
 function domainsToProbe() {

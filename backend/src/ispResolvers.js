@@ -1,5 +1,7 @@
 'use strict';
 
+const OTHER_PROVIDER = 'Other';
+
 const ISP_RESOLVER_GROUPS = [
   {
     provider: 'AT&T',
@@ -37,6 +39,10 @@ function normalize(value) {
   return String(value ?? '').toLowerCase().replace(/[^a-z0-9&.]+/g, ' ').trim();
 }
 
+function isOtherProvider(value) {
+  return normalize(value) === normalize(OTHER_PROVIDER);
+}
+
 function findResolverGroup(providerOrEvidence) {
   const evidence = normalize(providerOrEvidence);
   if (!evidence) return null;
@@ -48,7 +54,7 @@ function findResolverGroup(providerOrEvidence) {
 }
 
 function listProviderNames() {
-  return ISP_RESOLVER_GROUPS.map(group => group.provider);
+  return [...ISP_RESOLVER_GROUPS.map(group => group.provider), OTHER_PROVIDER];
 }
 
-module.exports = { ISP_RESOLVER_GROUPS, findResolverGroup, listProviderNames };
+module.exports = { ISP_RESOLVER_GROUPS, OTHER_PROVIDER, findResolverGroup, isOtherProvider, listProviderNames };
