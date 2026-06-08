@@ -1,0 +1,14 @@
+services:
+  dnscheck:
+    build: .
+    image: dnscheck:latest
+    container_name: dnscheck
+    restart: unless-stopped
+    volumes:
+      - ./probes.db:/app/probes.db
+    networks:
+      - web
+
+networks:
+  web:
+    external: true
