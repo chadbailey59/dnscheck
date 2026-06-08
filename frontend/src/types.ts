@@ -37,3 +37,21 @@ export interface LatestData {
   run_id: number | null;
   rows: ProbeRow[];
 }
+
+export interface ContributorSummaryRow {
+  provider: string;
+  server: string;
+  domain: string;
+  uploads: string | number;
+  contributors: string | number;
+  rows: string | number;
+  failures: string | number;
+  median_ms: number | null;
+  common_error: string | null;
+  last_ts: string;
+}
+
+export interface ContributorSummaryData {
+  minutes: number;
+  rows: ContributorSummaryRow[];
+}

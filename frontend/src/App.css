@@ -137,6 +137,10 @@ h1 {
   border-left: 4px solid;
 }
 
+.contributor-header {
+  border-left-color: #475569;
+}
+
 .category-label {
   font-weight: 700;
   font-size: 13px;
@@ -236,6 +240,42 @@ h1 {
   overflow: hidden;
 }
 
+.contributor-summary {
+  display: grid;
+  grid-template-columns: minmax(180px, 25%) minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: center;
+  width: 100%;
+  padding: 5px 1rem;
+  background: #fafafa;
+  cursor: pointer;
+  user-select: none;
+}
+
+.contributor-summary:hover,
+.provider-group.is-expanded .contributor-summary {
+  background: #f1f5f9;
+}
+
+.contributor-metrics {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.contributor-table {
+  border-top: 1px solid #f1f5f9;
+}
+
+.contributor-table table {
+  min-width: 760px;
+}
+
 /* Detail rows shown when expanded */
 .provider-detail {
   border-top: 1px solid #f1f5f9;
@@ -318,6 +358,15 @@ h1 {
 
   .cell {
     width: 3px;
+  }
+
+  .contributor-summary {
+    grid-template-columns: minmax(120px, 35%) minmax(0, 1fr);
+  }
+
+  .contributor-metrics {
+    gap: 0.5rem;
+    font-size: 11px;
   }
 }
 

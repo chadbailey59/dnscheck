@@ -1,5 +1,13 @@
 import { useState, useEffect, useCallback, useMemo, memo } from 'react';
-import type { Category, HistoryData, LatestData, SeriesEntry, ProbeRow } from './types';
+import type {
+  Category,
+  ContributorSummaryData,
+  ContributorSummaryRow,
+  HistoryData,
+  LatestData,
+  SeriesEntry,
+  ProbeRow,
+} from './types';
 
 const CATEGORY_CONFIG: Record<Category, { label: string; subtitle: string; color: string }> = {
   authoritative: { label: 'Authoritative', subtitle: '.co TLD Nameservers', color: '#7c3aed' },
@@ -37,6 +45,7 @@ function summaryCellState(series: SeriesEntry[], runId: number): { state: CellSt
 
 export default function App() {
   const [history, setHistory]             = useState<HistoryData | null>(null);
+  const [contributors, setContributors]   = useState<ContributorSummaryData | null>(null);
   const [limit, setLimit]                 = useState(180);
   const [auto, setAuto]                   = useState(true);
   const [loading, setLoading]             = useState(true);
@@ -50,8 +59,12 @@ export default function App() {
   const load = useCallback(async () => {
     try {
       setError(null);
-      const h = await apiFetch<HistoryData>(`/api/history?limit=${limit}`);
+      const [h, c] = await Promise.all([
+        apiFetch<HistoryData>(`/api/history?limit=${limit}`),
+        apiFetch<ContributorSummaryData>(`/api/contributors/summary?minutes=${limit}`),
+      ]);
       setHistory(h);
+      setContributors(c);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -138,6 +151,8 @@ export default function App() {
         />
       ))}
 
+      <ContributorSection data={contributors} />
+
       <DetailSection
         open={detailOpen}
         onToggle={() => setDetailOpen(o => !o)}
@@ -145,6 +160,109 @@ export default function App() {
         availableRuns={history?.runs ?? []}
         onRunChange={setSelectedRunId}
       />
+    </div>
+  );
+}
+
+// ── Contributor section ──────────────────────────────────────
+
+function asCount(value: string | number): number {
+  return typeof value === 'number' ? value : Number(value);
+}
+
+function ContributorSection({ data }: { data: ContributorSummaryData | null }) {
+  const rows = data?.rows ?? [];
+  const providers = useMemo(() => [...new Set(rows.map(r => r.provider))], [rows]);
+  const lastTs = rows
+    .map(r => new Date(r.last_ts).getTime())
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a)[0];
+
+  return (
+    <section className="category-section contributor-section">
+      <div className="category-header contributor-header">
+        <span className="category-label">Publisher Uploads</span>
+        <span className="category-subtitle">Last {data?.minutes ?? '...'} minutes</span>
+        {lastTs && (
+          <span className="category-stats">
+            Last upload: {new Date(lastTs).toLocaleString()}
+          </span>
+        )}
+      </div>
+
+      {rows.length === 0
+        ? <div className="empty">No publisher uploads in this window</div>
+        : providers.map(provider => (
+            <ContributorProvider
+              key={provider}
+              provider={provider}
+              rows={rows.filter(r => r.provider === provider)}
+            />
+          ))
+      }
+    </section>
+  );
+}
+
+function ContributorProvider({ provider, rows }: { provider: string; rows: ContributorSummaryRow[] }) {
+  const [expanded, setExpanded] = useState(provider === 'Other');
+  const failures = rows.reduce((n, r) => n + asCount(r.failures), 0);
+  const uploads = Math.max(0, ...rows.map(r => asCount(r.uploads)));
+  const contributors = Math.max(0, ...rows.map(r => asCount(r.contributors)));
+  const lastTs = rows
+    .map(r => new Date(r.last_ts).getTime())
+    .filter(Number.isFinite)
+    .sort((a, b) => b - a)[0];
+
+  const sortedRows = useMemo(() => [...rows].sort((a, b) =>
+    a.server.localeCompare(b.server)
+      || tldRank(a.domain) - tldRank(b.domain)
+      || a.domain.localeCompare(b.domain)
+  ), [rows]);
+
+  return (
+    <div className={`provider-group${expanded ? ' is-expanded' : ''}`}>
+      <div className="contributor-summary" onClick={() => setExpanded(e => !e)}>
+        <div className="summary-left">
+          <span className="summary-arrow">{expanded ? '▾' : '▸'}</span>
+          <span className="summary-label">{provider}</span>
+        </div>
+        <div className="contributor-metrics">
+          <span>{uploads} upload{uploads !== 1 ? 's' : ''}</span>
+          <span>{contributors} contributor{contributors !== 1 ? 's' : ''}</span>
+          <span className={failures > 0 ? 'stat-fail' : 'stat-ok'}>
+            {failures} failure{failures !== 1 ? 's' : ''}
+          </span>
+          {lastTs && <span>{new Date(lastTs).toLocaleString()}</span>}
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="table-scroll contributor-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Server</th><th>Domain</th><th>Uploads</th><th>Rows</th>
+                <th>Failures</th><th>Median ms</th><th>Common Error</th><th>Last Upload</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedRows.map(r => (
+                <tr key={`${r.server}\x00${r.domain}`} className={asCount(r.failures) > 0 ? 'row-fail' : ''}>
+                  <td className="mono">{r.server}</td>
+                  <td className="mono">{r.domain}</td>
+                  <td>{r.uploads}</td>
+                  <td>{r.rows}</td>
+                  <td className={asCount(r.failures) > 0 ? 'status-fail' : 'status-ok'}>{r.failures}</td>
+                  <td>{r.median_ms ?? ''}</td>
+                  <td className="error-cell">{r.common_error ?? ''}</td>
+                  <td>{new Date(r.last_ts).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
