@@ -72,7 +72,7 @@ async function runOnce() {
   const settled = await Promise.allSettled(
     tasks.map(async t => {
       const r = await probe(t.server, t.domain);
-      return { ts, run_id, ...t, ...r };
+      return { ts, run_id, source: 'hosted', ...t, ...r };
     }),
   );
 
@@ -106,4 +106,4 @@ function startPoller(intervalMs) {
   return setInterval(tick, intervalMs);
 }
 
-module.exports = { runOnce, startPoller };
+module.exports = { probe, runOnce, startPoller };

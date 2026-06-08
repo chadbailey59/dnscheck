@@ -6,7 +6,21 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: production backend
+# Stage 2: contributor probe image
+FROM node:20-slim AS contributor
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates dnsutils traceroute && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+
+# Install backend dependencies
+COPY backend/package*.json ./
+RUN npm ci --omit=dev
+
+# Copy backend source
+COPY backend/src ./src
+
+CMD ["node", "src/contributor.js"]
+
+# Stage 3: production backend
 FROM node:20-slim AS app
 RUN apt-get update && apt-get install -y --no-install-recommends dnsutils && rm -rf /var/lib/apt/lists/*
 WORKDIR /app

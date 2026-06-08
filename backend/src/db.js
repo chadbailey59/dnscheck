@@ -45,11 +45,23 @@ async function initDb() {
         ok         BOOLEAN     NOT NULL,
         ms         INTEGER,
         ns_count   INTEGER,
-        error      TEXT
+        error      TEXT,
+        contributor_id UUID,
+        source     TEXT        NOT NULL DEFAULT 'hosted',
+        upload_id  UUID
       );
+      ALTER TABLE probes ADD COLUMN IF NOT EXISTS contributor_id UUID;
+      ALTER TABLE probes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'hosted';
+      ALTER TABLE probes ADD COLUMN IF NOT EXISTS upload_id UUID;
+      UPDATE probes SET source = 'contributor' WHERE contributor_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_probes_run    ON probes(run_id);
       CREATE INDEX IF NOT EXISTS idx_probes_ts     ON probes(ts);
       CREATE INDEX IF NOT EXISTS idx_probes_server ON probes(server, domain, ts);
+      CREATE INDEX IF NOT EXISTS idx_probes_contributor ON probes(contributor_id);
+      CREATE INDEX IF NOT EXISTS idx_probes_source_run ON probes(source, run_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_probes_upload_unique
+        ON probes(upload_id, server, domain)
+        WHERE upload_id IS NOT NULL;
     `);
   } finally {
     client.release();
@@ -61,36 +73,39 @@ async function insertProbes(rows) {
   const client = await pool().connect();
   try {
     const values = rows.map((r, i) => {
-      const base = i * 10;
-      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10})`;
+      const base = i * 13;
+      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10},$${base+11},$${base+12},$${base+13})`;
     }).join(',');
     const params = rows.flatMap(r => [
       r.ts, r.run_id, r.category, r.provider, r.server, r.domain,
-      r.ok, r.ms, r.ns_count, r.error,
+      r.ok, r.ms, r.ns_count, r.error, r.contributor_id ?? null,
+      r.source ?? 'hosted', r.upload_id ?? null,
     ]);
-    await client.query(
-      `INSERT INTO probes(ts,run_id,category,provider,server,domain,ok,ms,ns_count,error) VALUES ${values}`,
+    const result = await client.query(
+      `INSERT INTO probes(ts,run_id,category,provider,server,domain,ok,ms,ns_count,error,contributor_id,source,upload_id) VALUES ${values}
+       ON CONFLICT DO NOTHING`,
       params,
     );
+    return result.rowCount;
   } finally {
     client.release();
   }
 }
 
-async function getLatest(runId = null) {
+async function getLatest(runId = null, source = 'hosted') {
   const client = await pool().connect();
   try {
     let targetRunId = runId ? BigInt(runId) : null;
     if (!targetRunId) {
-      const { rows: [top] } = await client.query('SELECT MAX(run_id) AS r FROM probes');
+      const { rows: [top] } = await client.query('SELECT MAX(run_id) AS r FROM probes WHERE source = $1', [source]);
       targetRunId = top?.r ?? null;
     }
     if (!targetRunId) return { ts: null, run_id: null, rows: [] };
     const { rows } = await client.query(
       `SELECT ts, category, provider, server, domain, ok, ms, ns_count, error
-       FROM probes WHERE run_id = $1
+       FROM probes WHERE run_id = $1 AND source = $2
        ORDER BY category, provider, server, domain`,
-      [targetRunId],
+      [targetRunId, source],
     );
     return { ts: rows[0]?.ts ?? null, run_id: String(targetRunId), rows };
   } finally {
@@ -98,20 +113,20 @@ async function getLatest(runId = null) {
   }
 }
 
-async function getHistory(limit) {
+async function getHistory(limit, source = 'hosted') {
   const client = await pool().connect();
   try {
     const { rows: runRows } = await client.query(
-      'SELECT DISTINCT run_id FROM probes ORDER BY run_id DESC LIMIT $1',
-      [limit],
+      'SELECT DISTINCT run_id FROM probes WHERE source = $2 ORDER BY run_id DESC LIMIT $1',
+      [limit, source],
     );
     const runs = runRows.map(r => Number(r.run_id)).reverse();
     if (runs.length === 0) return { runs: [], series: [] };
 
     const { rows } = await client.query(
       `SELECT run_id, ts, category, provider, server, domain, ok, ms, error
-       FROM probes WHERE run_id = ANY($1)`,
-      [runs],
+       FROM probes WHERE run_id = ANY($1) AND source = $2`,
+      [runs, source],
     );
 
     const seriesMap = new Map();
@@ -139,4 +154,32 @@ async function getHistory(limit) {
   }
 }
 
-module.exports = { initDb, insertProbes, getLatest, getHistory };
+async function getContributorSummary(minutes = 60) {
+  const client = await pool().connect();
+  try {
+    const { rows } = await client.query(
+      `SELECT
+         provider,
+         server,
+         domain,
+         COUNT(DISTINCT COALESCE(upload_id::TEXT, run_id::TEXT)) AS uploads,
+         COUNT(DISTINCT contributor_id) AS contributors,
+         COUNT(*) AS rows,
+         COUNT(*) FILTER (WHERE NOT ok) AS failures,
+         ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ms) FILTER (WHERE ms IS NOT NULL))::INTEGER AS median_ms,
+         MODE() WITHIN GROUP (ORDER BY error) FILTER (WHERE error IS NOT NULL) AS common_error,
+         MAX(ts) AS last_ts
+       FROM probes
+       WHERE source = 'contributor'
+         AND ts >= NOW() - ($1::TEXT || ' minutes')::INTERVAL
+       GROUP BY provider, server, domain
+       ORDER BY provider, server, domain`,
+      [minutes],
+    );
+    return { minutes, rows };
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { initDb, insertProbes, getLatest, getHistory, getContributorSummary };
