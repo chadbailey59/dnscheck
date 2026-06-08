@@ -170,7 +170,7 @@ h1 {
 
 .provider-summary {
   display: grid;
-  grid-template-columns: calc(175px + 0.5rem + 115px) 1fr;
+  grid-template-columns: calc(175px + 0.5rem + 115px) minmax(0, 1fr);
   gap: 0.5rem;
   align-items: center;
   width: 100%;
@@ -231,6 +231,8 @@ h1 {
   display: flex;
   gap: 1px;
   flex-wrap: nowrap;
+  justify-content: flex-end;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -264,7 +266,7 @@ h1 {
 
 .heatmap-row {
   display: grid;
-  grid-template-columns: 175px 115px 1fr;
+  grid-template-columns: 175px 115px minmax(0, 1fr);
   align-items: center;
   gap: 0.5rem;
   padding: 2px 1rem;
@@ -291,16 +293,32 @@ h1 {
   display: flex;
   gap: 1px;
   flex-wrap: nowrap;
+  justify-content: flex-end;
+  min-width: 0;
   overflow: hidden;
 }
 
 .cell {
   flex-shrink: 0;
   display: inline-block;
-  width: 7px;
+  width: 4px;
   height: 13px;
   border-radius: 1px;
   cursor: default;
+}
+
+@media (max-width: 900px) {
+  .provider-summary {
+    grid-template-columns: minmax(120px, 35%) minmax(0, 1fr);
+  }
+
+  .heatmap-row {
+    grid-template-columns: minmax(95px, 28%) minmax(70px, 20%) minmax(0, 1fr);
+  }
+
+  .cell {
+    width: 3px;
+  }
 }
 
 .cell-ok      { background: #22c55e; cursor: pointer; }
