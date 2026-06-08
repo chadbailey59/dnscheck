@@ -61,7 +61,8 @@ Optional settings:
 - `TRACE_TARGET`: traceroute target, default `9.9.9.9`.
 - `TRACE_MAX_HOPS`: maximum hops for ISP discovery, default `8`.
 - `TRACE_WAIT_SECS`: traceroute wait per hop, default `2`.
-- `PROBE_INTERVAL_MS`: delay between upload batches, default `60000`.
+- `PROBE_INTERVAL_MS`: wall-clock interval for upload batches, default `60000`.
+  The default starts batches at the beginning of each minute when possible.
 - `DNSCHECK_UPLOAD_URL`: upload endpoint, default `https://dnscheck.fun/api/probes`.
 - `DNSCHECK_DISABLE_RDAP=1`: skip RDAP lookup and rely on traceroute/PTR text.
 - `DNSCHECK_CONTRIBUTOR_ID`: explicit contributor UUID override.

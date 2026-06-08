@@ -182,6 +182,19 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function delayUntilNextInterval(intervalMs, nowMs = Date.now()) {
+  const remainder = nowMs % intervalMs;
+  return remainder === 0 ? 0 : intervalMs - remainder;
+}
+
+async function sleepUntilNextInterval(intervalMs) {
+  const delay = delayUntilNextInterval(intervalMs);
+  if (delay > 0) {
+    console.log(`Next batch scheduled for ${new Date(Date.now() + delay).toISOString()}.`);
+    await sleep(delay);
+  }
+}
+
 async function runBatch(group, domains, id) {
   const ts = new Date().toISOString();
   const uploadId = randomUUID();
@@ -226,15 +239,15 @@ async function main() {
   const domains = domainsToProbe();
   console.log(`Contributor ID: ${id.id} (${id.source}).`);
   console.log(`Identified ${group.provider} via ${method} (${evidenceCount} local evidence item${evidenceCount === 1 ? '' : 's'}).`);
-  console.log(`Running every ${PROBE_INTERVAL_MS}ms until stopped.`);
+  console.log(`Running on ${PROBE_INTERVAL_MS}ms wall-clock boundaries until stopped.`);
 
   for (;;) {
+    await sleepUntilNextInterval(PROBE_INTERVAL_MS);
     try {
       await runBatch(group, domains, id);
     } catch (e) {
       console.error(e);
     }
-    await sleep(PROBE_INTERVAL_MS);
   }
 }
 
@@ -245,4 +258,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { contributorId, normalizeUuid, parseTraceEvidence };
+module.exports = { contributorId, delayUntilNextInterval, normalizeUuid, parseTraceEvidence };
