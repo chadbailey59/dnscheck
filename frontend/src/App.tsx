@@ -23,6 +23,8 @@ async function apiFetch<T>(url: string): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+type DataSource = 'hosted' | 'contributor';
+
 // ── Summary cell state ────────────────────────────────────────
 
 type CellState = 'ok' | 'partial' | 'fail' | 'gap';
@@ -45,12 +47,14 @@ function summaryCellState(series: SeriesEntry[], runId: number): { state: CellSt
 
 export default function App() {
   const [history, setHistory]             = useState<HistoryData | null>(null);
+  const [contributorHistory, setContributorHistory] = useState<HistoryData | null>(null);
   const [contributors, setContributors]   = useState<ContributorSummaryData | null>(null);
   const [limit, setLimit]                 = useState(180);
   const [auto, setAuto]                   = useState(true);
   const [loading, setLoading]             = useState(true);
   const [error, setError]                 = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+  const [detailSource, setDetailSource]   = useState<DataSource>('hosted');
   const [detailOpen, setDetailOpen]       = useState(false);
   const [groupBy, setGroupBy]             = useState<GroupBy>(
     () => (localStorage.getItem('dnscheck.groupBy') as GroupBy) ?? 'server'
@@ -59,11 +63,13 @@ export default function App() {
   const load = useCallback(async () => {
     try {
       setError(null);
-      const [h, c] = await Promise.all([
+      const [h, ph, c] = await Promise.all([
         apiFetch<HistoryData>(`/api/history?limit=${limit}`),
+        apiFetch<HistoryData>(`/api/contributors/history?limit=${limit}`),
         apiFetch<ContributorSummaryData>(`/api/contributors/summary?minutes=${limit}`),
       ]);
       setHistory(h);
+      setContributorHistory(ph);
       setContributors(c);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -80,7 +86,8 @@ export default function App() {
   }, [auto, load]);
   useEffect(() => { localStorage.setItem('dnscheck.groupBy', groupBy); }, [groupBy]);
 
-  const handleCellClick = useCallback((runId: number) => {
+  const handleCellClick = useCallback((source: DataSource, runId: number) => {
+    setDetailSource(source);
     setSelectedRunId(runId);
     setDetailOpen(true);
   }, []);
@@ -94,6 +101,10 @@ export default function App() {
   const lastTs     = lastRun != null
     ? allSeries.flatMap(s => s.results[lastRun] ? [s.results[lastRun].ts] : [])[0]
     : null;
+  const publisherSeries = contributorHistory?.series ?? [];
+  const publisherRuns = contributorHistory?.runs ?? [];
+  const publisherLastRun = publisherRuns[publisherRuns.length - 1] ?? null;
+  const detailRuns = detailSource === 'contributor' ? publisherRuns : (history?.runs ?? []);
 
   return (
     <div className="app">
@@ -146,18 +157,29 @@ export default function App() {
           series={allSeries.filter(s => s.category === cat)}
           runs={history?.runs ?? []}
           lastRun={lastRun ?? null}
-          onCellClick={handleCellClick}
+          onCellClick={runId => handleCellClick('hosted', runId)}
           groupBy={groupBy}
         />
       ))}
+
+      <CategorySection
+        config={{ label: 'Publisher Uploads', subtitle: 'Contributor DNS', color: '#475569' }}
+        series={publisherSeries}
+        runs={publisherRuns}
+        lastRun={publisherLastRun}
+        onCellClick={runId => handleCellClick('contributor', runId)}
+        groupBy={groupBy}
+        emptyText="No publisher uploads in this window"
+      />
 
       <ContributorSection data={contributors} />
 
       <DetailSection
         open={detailOpen}
         onToggle={() => setDetailOpen(o => !o)}
+        source={detailSource}
         selectedRunId={selectedRunId}
-        availableRuns={history?.runs ?? []}
+        availableRuns={detailRuns}
         onRunChange={setSelectedRunId}
       />
     </div>
@@ -181,7 +203,7 @@ function ContributorSection({ data }: { data: ContributorSummaryData | null }) {
   return (
     <section className="category-section contributor-section">
       <div className="category-header contributor-header">
-        <span className="category-label">Publisher Uploads</span>
+        <span className="category-label">Publisher Summary</span>
         <span className="category-subtitle">Last {data?.minutes ?? '...'} minutes</span>
         {lastTs && (
           <span className="category-stats">
@@ -270,7 +292,7 @@ function ContributorProvider({ provider, rows }: { provider: string; rows: Contr
 // ── Category section ──────────────────────────────────────────
 
 function CategorySection({
-  config, series, runs, lastRun, onCellClick, groupBy,
+  config, series, runs, lastRun, onCellClick, groupBy, emptyText = 'No data yet — first poll pending',
 }: {
   config: { label: string; subtitle: string; color: string };
   series: SeriesEntry[];
@@ -278,6 +300,7 @@ function CategorySection({
   lastRun: number | null;
   onCellClick: (runId: number) => void;
   groupBy: GroupBy;
+  emptyText?: string;
 }) {
   const providers = useMemo(() => [...new Set(series.map(s => s.provider))], [series]);
   const failing   = lastRun != null ? series.filter(s => s.results[lastRun]?.ok === false).length : 0;
@@ -297,7 +320,7 @@ function CategorySection({
       </div>
 
       {providers.length === 0
-        ? <div className="empty">No data yet — first poll pending</div>
+        ? <div className="empty">{emptyText}</div>
         : providers.map(provider => (
             <ProviderGroup
               key={provider}
@@ -472,29 +495,32 @@ function HeatmapRow({
 // ── Detail section (lazy) ─────────────────────────────────────
 
 function DetailSection({
-  open, onToggle, selectedRunId, availableRuns, onRunChange,
+  open, onToggle, source, selectedRunId, availableRuns, onRunChange,
 }: {
   open: boolean;
   onToggle: () => void;
+  source: DataSource;
   selectedRunId: number | null;
   availableRuns: number[];
   onRunChange: (runId: number) => void;
 }) {
   const [data, setData]         = useState<LatestData | null>(null);
   const [loading, setLoading]   = useState(false);
-  const [loadedId, setLoadedId] = useState<number | null>(null);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
 
   const effectiveRunId = selectedRunId ?? (availableRuns[availableRuns.length - 1] ?? null);
+  const effectiveKey = effectiveRunId === null ? null : `${source}:${effectiveRunId}`;
 
   useEffect(() => {
-    if (!open || effectiveRunId === null || effectiveRunId === loadedId) return;
+    if (!open || effectiveRunId === null || effectiveKey === loadedKey) return;
     setLoading(true);
-    const url = selectedRunId != null ? `/api/latest?run_id=${selectedRunId}` : '/api/latest';
+    const baseUrl = source === 'contributor' ? '/api/contributors/latest' : '/api/latest';
+    const url = selectedRunId != null ? `${baseUrl}?run_id=${selectedRunId}` : baseUrl;
     apiFetch<LatestData>(url)
-      .then(d => { setData(d); setLoadedId(effectiveRunId); })
+      .then(d => { setData(d); setLoadedKey(effectiveKey); })
       .catch(e => console.error('detail fetch:', e))
       .finally(() => setLoading(false));
-  }, [open, effectiveRunId, loadedId, selectedRunId]);
+  }, [open, source, effectiveRunId, effectiveKey, loadedKey, selectedRunId]);
 
   const displayTs = data?.ts ? new Date(data.ts).toLocaleString() : null;
 
@@ -503,6 +529,7 @@ function DetailSection({
       <button className="detail-toggle" onClick={onToggle}>
         <span className="toggle-arrow">{open ? '▾' : '▸'}</span>
         <span className="toggle-label">Run Detail</span>
+        <span className="toggle-hint">{source === 'contributor' ? 'publisher' : 'hosted'}</span>
         {!open && displayTs && <span className="toggle-hint">{displayTs}</span>}
         {!open && !displayTs && availableRuns.length > 0 && (
           <span className="toggle-hint">click to inspect a run</span>

@@ -172,6 +172,26 @@ function createApp() {
     }
   });
 
+  app.get('/api/contributors/latest', async (req, res) => {
+    const runId = req.query.run_id ? Number(req.query.run_id) : null;
+    try {
+      res.json(await getLatest(runId, 'contributor'));
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get('/api/contributors/history', async (req, res) => {
+    const limit = Math.min(Math.max(parseInt(req.query.limit ?? '180', 10) || 180, 1), 1440);
+    try {
+      res.json(await getHistory(limit, 'contributor'));
+    } catch (e) {
+      console.error(e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   app.get('/api/contributors/summary', async (req, res) => {
     const minutes = Math.min(Math.max(parseInt(req.query.minutes ?? '60', 10) || 60, 1), 1440);
     try {
