@@ -62,6 +62,10 @@ async function initDb() {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_probes_upload_unique
         ON probes(upload_id, server, domain)
         WHERE upload_id IS NOT NULL;
+      UPDATE probes
+      SET run_id = (EXTRACT(EPOCH FROM date_trunc('minute', ts)) * 1000)::BIGINT
+      WHERE source = 'contributor'
+        AND run_id <> (EXTRACT(EPOCH FROM date_trunc('minute', ts)) * 1000)::BIGINT;
     `);
   } finally {
     client.release();
@@ -92,7 +96,52 @@ async function insertProbes(rows) {
   }
 }
 
+const CONTRIBUTOR_RUN_ID_SQL = "(EXTRACT(EPOCH FROM date_trunc('minute', ts)) * 1000)::BIGINT";
+
+function minuteRunId(runId) {
+  const n = BigInt(runId);
+  return n - (n % 60000n);
+}
+
+async function getContributorLatest(runId = null) {
+  const client = await pool().connect();
+  try {
+    let targetRunId = runId ? minuteRunId(runId) : null;
+    if (!targetRunId) {
+      const { rows: [top] } = await client.query(
+        `SELECT MAX(${CONTRIBUTOR_RUN_ID_SQL}) AS r FROM probes WHERE source = 'contributor'`,
+      );
+      targetRunId = top?.r ?? null;
+    }
+    if (!targetRunId) return { ts: null, run_id: null, rows: [] };
+
+    const { rows } = await client.query(
+      `SELECT
+         MAX(ts) AS ts,
+         category,
+         provider,
+         server,
+         domain,
+         BOOL_AND(ok) AS ok,
+         ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ms) FILTER (WHERE ms IS NOT NULL))::INTEGER AS ms,
+         ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ns_count) FILTER (WHERE ns_count IS NOT NULL))::INTEGER AS ns_count,
+         MODE() WITHIN GROUP (ORDER BY error) FILTER (WHERE error IS NOT NULL) AS error
+       FROM probes
+       WHERE source = 'contributor'
+         AND ${CONTRIBUTOR_RUN_ID_SQL} = $1::BIGINT
+       GROUP BY category, provider, server, domain
+       ORDER BY category, provider, server, domain`,
+      [targetRunId],
+    );
+    return { ts: rows[0]?.ts ?? null, run_id: String(targetRunId), rows };
+  } finally {
+    client.release();
+  }
+}
+
 async function getLatest(runId = null, source = 'hosted') {
+  if (source === 'contributor') return getContributorLatest(runId);
+
   const client = await pool().connect();
   try {
     let targetRunId = runId ? BigInt(runId) : null;
@@ -113,7 +162,70 @@ async function getLatest(runId = null, source = 'hosted') {
   }
 }
 
+async function getContributorHistory(limit) {
+  const client = await pool().connect();
+  try {
+    const { rows: runRows } = await client.query(
+      `SELECT DISTINCT ${CONTRIBUTOR_RUN_ID_SQL} AS run_id
+       FROM probes
+       WHERE source = 'contributor'
+       ORDER BY run_id DESC
+       LIMIT $1`,
+      [limit],
+    );
+    const runs = runRows.map(r => Number(r.run_id)).reverse();
+    if (runs.length === 0) return { runs: [], series: [] };
+
+    const { rows } = await client.query(
+      `SELECT
+         ${CONTRIBUTOR_RUN_ID_SQL} AS run_id,
+         MAX(ts) AS ts,
+         category,
+         provider,
+         server,
+         domain,
+         BOOL_AND(ok) AS ok,
+         ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ms) FILTER (WHERE ms IS NOT NULL))::INTEGER AS ms,
+         MODE() WITHIN GROUP (ORDER BY error) FILTER (WHERE error IS NOT NULL) AS error
+       FROM probes
+       WHERE source = 'contributor'
+         AND ${CONTRIBUTOR_RUN_ID_SQL} = ANY($1::BIGINT[])
+       GROUP BY ${CONTRIBUTOR_RUN_ID_SQL}, category, provider, server, domain`,
+      [runs],
+    );
+
+    return rowsToHistory(runs, rows);
+  } finally {
+    client.release();
+  }
+}
+
+function rowsToHistory(runs, rows) {
+  const seriesMap = new Map();
+  for (const r of rows) {
+    const key = `${r.category}\x00${r.provider}\x00${r.server}\x00${r.domain}`;
+    if (!seriesMap.has(key)) {
+      seriesMap.set(key, {
+        category: r.category,
+        provider: r.provider,
+        server: r.server,
+        domain: r.domain,
+        results: {},
+      });
+    }
+    seriesMap.get(key).results[Number(r.run_id)] = {
+      ok: r.ok,
+      ms: r.ms,
+      ts: r.ts,
+      error: r.error,
+    };
+  }
+  return { runs, series: [...seriesMap.values()] };
+}
+
 async function getHistory(limit, source = 'hosted') {
+  if (source === 'contributor') return getContributorHistory(limit);
+
   const client = await pool().connect();
   try {
     const { rows: runRows } = await client.query(
@@ -129,26 +241,7 @@ async function getHistory(limit, source = 'hosted') {
       [runs, source],
     );
 
-    const seriesMap = new Map();
-    for (const r of rows) {
-      const key = `${r.category}\x00${r.provider}\x00${r.server}\x00${r.domain}`;
-      if (!seriesMap.has(key)) {
-        seriesMap.set(key, {
-          category: r.category,
-          provider: r.provider,
-          server: r.server,
-          domain: r.domain,
-          results: {},
-        });
-      }
-      seriesMap.get(key).results[Number(r.run_id)] = {
-        ok: r.ok,
-        ms: r.ms,
-        ts: r.ts,
-        error: r.error,
-      };
-    }
-    return { runs, series: [...seriesMap.values()] };
+    return rowsToHistory(runs, rows);
   } finally {
     client.release();
   }

@@ -44,13 +44,8 @@ function asTimestamp(value, field) {
   return ts.toISOString();
 }
 
-function asRunId(value) {
-  if (value == null || value === '') return Date.now();
-  const n = Number(value);
-  if (!Number.isSafeInteger(n) || n <= 0) {
-    throw new Error('run_id must be a positive integer');
-  }
-  return n;
+function minuteRunId(ts) {
+  return Math.floor(new Date(ts).getTime() / 60000) * 60000;
 }
 
 function asOptionalUuid(value, field) {
@@ -71,7 +66,6 @@ function normalizeUpload(body) {
     throw new Error(`rows must contain ${MAX_UPLOAD_ROWS} entries or fewer`);
   }
 
-  const run_id = asRunId(body.run_id);
   const contributor_id = asOptionalUuid(body.contributor_id, 'contributor_id');
   const upload_id = asOptionalUuid(body.upload_id, 'upload_id');
   const batchTs = asTimestamp(body.ts, 'ts');
@@ -89,7 +83,6 @@ function normalizeUpload(body) {
 
     return {
       ts: row.ts == null ? batchTs : asTimestamp(row.ts, `rows[${index}].ts`),
-      run_id,
       category,
       provider: asNonEmptyString(row.provider, `rows[${index}].provider`, 128),
       server: asNonEmptyString(row.server, `rows[${index}].server`, 255),
@@ -103,6 +96,8 @@ function normalizeUpload(body) {
       upload_id,
     };
   });
+  const run_id = minuteRunId(rows[0].ts);
+  for (const row of rows) row.run_id = run_id;
 
   return { run_id, contributor_id, upload_id, rows };
 }
