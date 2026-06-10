@@ -10,6 +10,19 @@ services:
     networks:
       - web
 
+  dnscheck-contributor:
+    build:
+      context: .
+      target: contributor
+    image: dnscheck-contributor:latest
+    container_name: dnscheck-contributor
+    restart: unless-stopped
+    environment:
+      - ISP_PROVIDER=AT&T
+      - DNSCHECK_UPLOAD_URL=https://dnscheck.onrender.com/api/probes
+      - DNSCHECK_CONTRIBUTOR_ID=806edbe2-392c-4c20-8c71-0d1418860330
+      - PROBE_INTERVAL_MS=60000
+
 networks:
   web:
     external: true

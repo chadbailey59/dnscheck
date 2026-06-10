@@ -21,6 +21,12 @@ const DNS_SERVERS = [
   { server: 'b.registrydns.co', category: 'authoritative', provider: '.co Registry', tld: 'co' },
   { server: 'c.registrydns.co', category: 'authoritative', provider: '.co Registry', tld: 'co' },
   { server: 'd.registrydns.co', category: 'authoritative', provider: '.co Registry', tld: 'co' },
+  // Direct-IP probes bypass the circular DNS dependency (resolving *.registrydns.co
+  // requires querying the .co TLD nameservers, which are the same servers being probed).
+  { server: '194.169.218.57', category: 'authoritative', provider: '.co Registry (direct)', tld: 'co' },
+  { server: '185.24.64.57',   category: 'authoritative', provider: '.co Registry (direct)', tld: 'co' },
+  { server: '212.18.248.57',  category: 'authoritative', provider: '.co Registry (direct)', tld: 'co' },
+  { server: '212.18.249.57',  category: 'authoritative', provider: '.co Registry (direct)', tld: 'co' },
 
   // ── Authoritative: .com TLD (ICANN gTLD servers) ─────────────────────────
   { server: 'a.gtld-servers.net', category: 'authoritative', provider: '.com gTLD', tld: 'com' },

@@ -5,7 +5,7 @@ const { randomUUID } = require('crypto');
 const { execFile } = require('child_process');
 const { ALL_DOMAINS } = require('./config');
 const { probe } = require('./poller');
-const { OTHER_PROVIDER, findResolverGroup, isOtherProvider, listProviderNames } = require('./ispResolvers');
+const { OTHER_PROVIDER, findResolverGroup, findResolverGroups, isOtherProvider, listProviderNames } = require('./ispResolvers');
 
 const DEFAULT_UPLOAD_URL = 'https://dnscheck.fun/api/probes';
 const UPLOAD_URL = process.env.DNSCHECK_UPLOAD_URL || process.env.UPLOAD_URL || DEFAULT_UPLOAD_URL;
@@ -135,10 +135,14 @@ function otherResolverGroup() {
 async function discoverIsp() {
   if (process.env.ISP_PROVIDER) {
     if (isOtherProvider(process.env.ISP_PROVIDER)) {
-      return { group: otherResolverGroup(), method: 'ISP_PROVIDER override', evidenceCount: 1 };
+      return { groups: [otherResolverGroup()], method: 'ISP_PROVIDER override', evidenceCount: 1 };
     }
-    const group = findResolverGroup(process.env.ISP_PROVIDER);
-    return { group, method: 'ISP_PROVIDER override', evidenceCount: group ? 1 : 0 };
+    const groups = findResolverGroups(process.env.ISP_PROVIDER);
+    if (groups.length === 0) {
+      const group = findResolverGroup(process.env.ISP_PROVIDER);
+      return { groups: group ? [group] : [], method: 'ISP_PROVIDER override', evidenceCount: group ? 1 : 0 };
+    }
+    return { groups, method: 'ISP_PROVIDER override', evidenceCount: groups.length };
   }
 
   const trace = await runCommand(
@@ -156,7 +160,7 @@ async function discoverIsp() {
 
   const group = findResolverGroup(evidence.join('\n'));
   return {
-    group: group ?? otherResolverGroup(),
+    groups: [group ?? otherResolverGroup()],
     method: group ? `traceroute ${TRACE_TARGET}` : `traceroute ${TRACE_TARGET} fallback`,
     evidenceCount: evidence.length,
   };
@@ -228,8 +232,8 @@ async function main() {
     process.exit(2);
   }
 
-  const { group, method, evidenceCount } = await discoverIsp();
-  if (!group) {
+  const { groups, method, evidenceCount } = await discoverIsp();
+  if (groups.length === 0) {
     console.error(`Could not identify a configured ISP from ${method}.`);
     console.error(`Set ISP_PROVIDER to one of: ${listProviderNames().join(', ')}`);
     process.exit(2);
@@ -238,15 +242,18 @@ async function main() {
   const id = await contributorId();
   const domains = domainsToProbe();
   console.log(`Contributor ID: ${id.id} (${id.source}).`);
-  console.log(`Identified ${group.provider} via ${method} (${evidenceCount} local evidence item${evidenceCount === 1 ? '' : 's'}).`);
+  const providerNames = groups.map(g => g.provider).join(', ');
+  console.log(`Identified ${providerNames} via ${method} (${evidenceCount} local evidence item${evidenceCount === 1 ? '' : 's'}).`);
   console.log(`Running on ${PROBE_INTERVAL_MS}ms wall-clock boundaries until stopped.`);
 
   for (;;) {
     await sleepUntilNextInterval(PROBE_INTERVAL_MS);
-    try {
-      await runBatch(group, domains, id);
-    } catch (e) {
-      console.error(e);
+    for (const group of groups) {
+      try {
+        await runBatch(group, domains, id);
+      } catch (e) {
+        console.error(e);
+      }
     }
   }
 }
