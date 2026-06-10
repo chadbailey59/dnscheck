@@ -10,12 +10,13 @@ function pool() {
 }
 
 async function ensureDatabase() {
-  // Connect to the default 'postgres' DB to create 'dnscheck' if missing.
+  // On managed PostgreSQL (e.g. Render) the app user can't connect to 'postgres'
+  // or run CREATE DATABASE — the DB is pre-provisioned. Skip gracefully in that case.
   const url = new URL(process.env.DATABASE_URL);
   const dbName = url.pathname.replace(/^\//, '');
   const adminUrl = process.env.DATABASE_URL.replace(url.pathname, '/postgres');
   const { Pool: P } = require('pg');
-  const admin = new P({ connectionString: adminUrl });
+  const admin = new P({ connectionString: adminUrl, connectionTimeoutMillis: 5000 });
   try {
     const { rows } = await admin.query(
       'SELECT 1 FROM pg_database WHERE datname = $1', [dbName]
@@ -24,8 +25,10 @@ async function ensureDatabase() {
       await admin.query(`CREATE DATABASE "${dbName}"`);
       console.log(`Created database: ${dbName}`);
     }
+  } catch (e) {
+    console.log(`ensureDatabase skipped (${e.message}) — assuming DB already exists`);
   } finally {
-    await admin.end();
+    await admin.end().catch(() => {});
   }
 }
 
