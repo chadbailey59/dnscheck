@@ -63,9 +63,6 @@ async function initDb() {
       CREATE INDEX IF NOT EXISTS idx_probes_contributor ON probes(contributor_id);
       CREATE INDEX IF NOT EXISTS idx_probes_source_run ON probes(source, run_id);
       CREATE INDEX IF NOT EXISTS idx_probes_source_ts  ON probes(source, ts);
-      CREATE INDEX IF NOT EXISTS idx_probes_contributor_minute
-        ON probes(((EXTRACT(EPOCH FROM date_trunc('minute', ts)) * 1000)::BIGINT))
-        WHERE source = 'contributor';
       CREATE UNIQUE INDEX IF NOT EXISTS idx_probes_upload_unique
         ON probes(upload_id, server, domain)
         WHERE upload_id IS NOT NULL;
@@ -116,7 +113,7 @@ async function getContributorLatest(runId = null) {
     let targetRunId = runId ? minuteRunId(runId) : null;
     if (!targetRunId) {
       const { rows: [top] } = await client.query(
-        `SELECT MAX(${CONTRIBUTOR_RUN_ID_SQL}) AS r FROM probes WHERE source = 'contributor'`,
+        `SELECT MAX(run_id) AS r FROM probes WHERE source = 'contributor'`,
       );
       targetRunId = top?.r ?? null;
     }
@@ -135,7 +132,7 @@ async function getContributorLatest(runId = null) {
          MODE() WITHIN GROUP (ORDER BY error) FILTER (WHERE error IS NOT NULL) AS error
        FROM probes
        WHERE source = 'contributor'
-         AND ${CONTRIBUTOR_RUN_ID_SQL} = $1::BIGINT
+         AND run_id = $1::BIGINT
        GROUP BY category, provider, server, domain
        ORDER BY category, provider, server, domain`,
       [targetRunId],
@@ -176,10 +173,10 @@ async function getContributorHistory(limit, beforeMs = null) {
     let beforeClause = '';
     if (beforeMs != null) {
       params.push(String(beforeMs));
-      beforeClause = ` AND ${CONTRIBUTOR_RUN_ID_SQL} <= $${params.length}::BIGINT`;
+      beforeClause = ` AND run_id <= $${params.length}::BIGINT`;
     }
     const { rows: runRows } = await client.query(
-      `SELECT DISTINCT ${CONTRIBUTOR_RUN_ID_SQL} AS run_id
+      `SELECT DISTINCT run_id
        FROM probes
        WHERE source = 'contributor'${beforeClause}
        ORDER BY run_id DESC
@@ -191,7 +188,7 @@ async function getContributorHistory(limit, beforeMs = null) {
 
     const { rows } = await client.query(
       `SELECT
-         ${CONTRIBUTOR_RUN_ID_SQL} AS run_id,
+         run_id,
          MAX(ts) AS ts,
          category,
          provider,
@@ -202,8 +199,8 @@ async function getContributorHistory(limit, beforeMs = null) {
          MODE() WITHIN GROUP (ORDER BY error) FILTER (WHERE error IS NOT NULL) AS error
        FROM probes
        WHERE source = 'contributor'
-         AND ${CONTRIBUTOR_RUN_ID_SQL} = ANY($1::BIGINT[])
-       GROUP BY ${CONTRIBUTOR_RUN_ID_SQL}, category, provider, server, domain`,
+         AND run_id = ANY($1::BIGINT[])
+       GROUP BY run_id, category, provider, server, domain`,
       [runs],
     );
 
