@@ -11,7 +11,7 @@ const ALL_DOMAINS = [...CO_DOMAINS, ...COM_DOMAINS, ...NET_DOMAINS, ...ORG_DOMAI
 // Map used by the poller to pick the right domain list per authoritative TLD.
 const DOMAINS_BY_TLD = { co: CO_DOMAINS, com: COM_DOMAINS, net: NET_DOMAINS, org: ORG_DOMAINS };
 
-const TIMEOUT_SECS = 3;
+const TIMEOUT_SECS = 6;
 
 // ISP resolver IPs from public records / AS data.
 // These are best-effort — residential ISP DNS IPs can change.
@@ -69,4 +69,12 @@ const DNS_SERVERS = [
   { server: '205.171.2.65',      category: 'isp', provider: 'CenturyLink/Lumen' },
 ];
 
-module.exports = { DNS_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, TIMEOUT_SECS };
+const EXCLUDE_PROVIDERS = process.env.EXCLUDE_PROVIDERS
+  ? new Set(process.env.EXCLUDE_PROVIDERS.split(',').map(s => s.trim()))
+  : new Set();
+
+const ACTIVE_DNS_SERVERS = EXCLUDE_PROVIDERS.size > 0
+  ? DNS_SERVERS.filter(s => !EXCLUDE_PROVIDERS.has(s.provider))
+  : DNS_SERVERS;
+
+module.exports = { DNS_SERVERS: ACTIVE_DNS_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, TIMEOUT_SECS };
