@@ -1,7 +1,7 @@
 'use strict';
 
 const { execFile } = require('child_process');
-const { DNS_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, TIMEOUT_SECS } = require('./config');
+const { POLL_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, TIMEOUT_SECS } = require('./config');
 const { insertProbes } = require('./db');
 
 const STATUS_RE = /status:\s*([A-Z]+)/;
@@ -60,7 +60,7 @@ async function runOnce() {
   const run_id = Date.now();
 
   const tasks = [];
-  for (const { server, category, provider, tld } of DNS_SERVERS) {
+  for (const { server, category, provider, tld } of POLL_SERVERS) {
     const domains = category === 'authoritative'
       ? (DOMAINS_BY_TLD[tld] ?? ALL_DOMAINS)
       : ALL_DOMAINS;

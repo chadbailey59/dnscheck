@@ -3,7 +3,7 @@
 const express = require('express');
 const path = require('path');
 const { getLatest, getHistory, getContributorSummary, insertProbes } = require('./db');
-const { DNS_SERVERS, SAMPLE_DOMAINS, CONTROL_DOMAIN } = require('./config');
+const { DNS_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, SAMPLE_DOMAINS, CONTROL_DOMAIN } = require('./config');
 
 const MAX_UPLOAD_ROWS = parseInt(process.env.MAX_UPLOAD_ROWS ?? '1000', 10);
 const CATEGORIES = new Set(['authoritative', 'third_party', 'isp']);
@@ -161,7 +161,19 @@ function createApp() {
     const limit = Math.min(Math.max(parseInt(req.query.limit ?? '180', 10) || 180, 1), 10080);
     const beforeMs = req.query.before ? Number(req.query.before) : null;
     try {
-      res.json(await getHistory(limit, 'hosted', Number.isFinite(beforeMs) ? beforeMs : null));
+      const result = await getHistory(limit, 'hosted', Number.isFinite(beforeMs) ? beforeMs : null);
+      // Add empty series for any configured servers with no data in this window,
+      // so the UI can display them as all-gap rows (e.g. AT&T on non-AT&T networks).
+      const seenKeys = new Set(result.series.map(s => `${s.server}\x00${s.domain}`));
+      for (const { server, category, provider, tld } of DNS_SERVERS) {
+        const domains = category === 'authoritative' ? (DOMAINS_BY_TLD[tld] ?? ALL_DOMAINS) : ALL_DOMAINS;
+        for (const domain of domains) {
+          if (!seenKeys.has(`${server}\x00${domain}`)) {
+            result.series.push({ category, provider, server, domain, results: {} });
+          }
+        }
+      }
+      res.json(result);
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: e.message });

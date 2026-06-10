@@ -73,8 +73,10 @@ const EXCLUDE_PROVIDERS = process.env.EXCLUDE_PROVIDERS
   ? new Set(process.env.EXCLUDE_PROVIDERS.split(',').map(s => s.trim()))
   : new Set();
 
-const ACTIVE_DNS_SERVERS = EXCLUDE_PROVIDERS.size > 0
+// POLL_SERVERS omits providers that won't respond from this network.
+// DNS_SERVERS retains all of them so the UI can show gaps for unpolled servers.
+const POLL_SERVERS = EXCLUDE_PROVIDERS.size > 0
   ? DNS_SERVERS.filter(s => !EXCLUDE_PROVIDERS.has(s.provider))
   : DNS_SERVERS;
 
-module.exports = { DNS_SERVERS: ACTIVE_DNS_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, TIMEOUT_SECS };
+module.exports = { DNS_SERVERS, POLL_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, TIMEOUT_SECS };
