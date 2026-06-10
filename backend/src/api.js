@@ -158,9 +158,10 @@ function createApp() {
   });
 
   app.get('/api/history', async (req, res) => {
-    const limit = Math.min(Math.max(parseInt(req.query.limit ?? '180', 10) || 180, 1), 1440);
+    const limit = Math.min(Math.max(parseInt(req.query.limit ?? '180', 10) || 180, 1), 10080);
+    const beforeMs = req.query.before ? Number(req.query.before) : null;
     try {
-      res.json(await getHistory(limit, 'hosted'));
+      res.json(await getHistory(limit, 'hosted', Number.isFinite(beforeMs) ? beforeMs : null));
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: e.message });
@@ -178,9 +179,10 @@ function createApp() {
   });
 
   app.get('/api/contributors/history', async (req, res) => {
-    const limit = Math.min(Math.max(parseInt(req.query.limit ?? '180', 10) || 180, 1), 1440);
+    const limit = Math.min(Math.max(parseInt(req.query.limit ?? '180', 10) || 180, 1), 10080);
+    const beforeMs = req.query.before ? Number(req.query.before) : null;
     try {
-      res.json(await getHistory(limit, 'contributor'));
+      res.json(await getHistory(limit, 'contributor', Number.isFinite(beforeMs) ? beforeMs : null));
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: e.message });
@@ -188,9 +190,10 @@ function createApp() {
   });
 
   app.get('/api/contributors/summary', async (req, res) => {
-    const minutes = Math.min(Math.max(parseInt(req.query.minutes ?? '60', 10) || 60, 1), 1440);
+    const minutes = Math.min(Math.max(parseInt(req.query.minutes ?? '60', 10) || 60, 1), 10080);
+    const beforeMs = req.query.before ? Number(req.query.before) : null;
     try {
-      res.json(await getContributorSummary(minutes));
+      res.json(await getContributorSummary(minutes, Number.isFinite(beforeMs) ? beforeMs : null));
     } catch (e) {
       console.error(e);
       res.status(500).json({ error: e.message });

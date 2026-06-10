@@ -59,6 +59,10 @@ async function initDb() {
       CREATE INDEX IF NOT EXISTS idx_probes_server ON probes(server, domain, ts);
       CREATE INDEX IF NOT EXISTS idx_probes_contributor ON probes(contributor_id);
       CREATE INDEX IF NOT EXISTS idx_probes_source_run ON probes(source, run_id);
+      CREATE INDEX IF NOT EXISTS idx_probes_source_ts  ON probes(source, ts);
+      CREATE INDEX IF NOT EXISTS idx_probes_contributor_minute
+        ON probes(((EXTRACT(EPOCH FROM date_trunc('minute', ts)) * 1000)::BIGINT))
+        WHERE source = 'contributor';
       CREATE UNIQUE INDEX IF NOT EXISTS idx_probes_upload_unique
         ON probes(upload_id, server, domain)
         WHERE upload_id IS NOT NULL;
@@ -162,16 +166,22 @@ async function getLatest(runId = null, source = 'hosted') {
   }
 }
 
-async function getContributorHistory(limit) {
+async function getContributorHistory(limit, beforeMs = null) {
   const client = await pool().connect();
   try {
+    const params = [limit];
+    let beforeClause = '';
+    if (beforeMs != null) {
+      params.push(String(beforeMs));
+      beforeClause = ` AND ${CONTRIBUTOR_RUN_ID_SQL} <= $${params.length}::BIGINT`;
+    }
     const { rows: runRows } = await client.query(
       `SELECT DISTINCT ${CONTRIBUTOR_RUN_ID_SQL} AS run_id
        FROM probes
-       WHERE source = 'contributor'
+       WHERE source = 'contributor'${beforeClause}
        ORDER BY run_id DESC
        LIMIT $1`,
-      [limit],
+      params,
     );
     const runs = runRows.map(r => Number(r.run_id)).reverse();
     if (runs.length === 0) return { runs: [], series: [] };
@@ -223,14 +233,20 @@ function rowsToHistory(runs, rows) {
   return { runs, series: [...seriesMap.values()] };
 }
 
-async function getHistory(limit, source = 'hosted') {
-  if (source === 'contributor') return getContributorHistory(limit);
+async function getHistory(limit, source = 'hosted', beforeMs = null) {
+  if (source === 'contributor') return getContributorHistory(limit, beforeMs);
 
   const client = await pool().connect();
   try {
+    const params = [limit, source];
+    let beforeClause = '';
+    if (beforeMs != null) {
+      params.push(String(beforeMs));
+      beforeClause = ` AND run_id <= $${params.length}::BIGINT`;
+    }
     const { rows: runRows } = await client.query(
-      'SELECT DISTINCT run_id FROM probes WHERE source = $2 ORDER BY run_id DESC LIMIT $1',
-      [limit, source],
+      `SELECT DISTINCT run_id FROM probes WHERE source = $2${beforeClause} ORDER BY run_id DESC LIMIT $1`,
+      params,
     );
     const runs = runRows.map(r => Number(r.run_id)).reverse();
     if (runs.length === 0) return { runs: [], series: [] };
@@ -247,9 +263,17 @@ async function getHistory(limit, source = 'hosted') {
   }
 }
 
-async function getContributorSummary(minutes = 60) {
+async function getContributorSummary(minutes = 60, beforeMs = null) {
   const client = await pool().connect();
   try {
+    const params = [minutes];
+    let timeCondition;
+    if (beforeMs != null) {
+      params.push(new Date(Number(beforeMs)).toISOString());
+      timeCondition = `ts > $2::TIMESTAMPTZ - ($1::TEXT || ' minutes')::INTERVAL AND ts <= $2::TIMESTAMPTZ`;
+    } else {
+      timeCondition = `ts > NOW() - ($1::TEXT || ' minutes')::INTERVAL`;
+    }
     const { rows } = await client.query(
       `SELECT
          provider,
@@ -264,10 +288,10 @@ async function getContributorSummary(minutes = 60) {
          MAX(ts) AS last_ts
        FROM probes
        WHERE source = 'contributor'
-         AND ts >= NOW() - ($1::TEXT || ' minutes')::INTERVAL
+         AND ${timeCondition}
        GROUP BY provider, server, domain
        ORDER BY provider, server, domain`,
-      [minutes],
+      params,
     );
     return { minutes, rows };
   } finally {

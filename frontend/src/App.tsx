@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import { useState, useEffect, useCallback, useMemo, memo, type MouseEvent } from 'react';
 import type {
   Category,
   ContributorSummaryData,
@@ -17,17 +17,59 @@ const CATEGORY_CONFIG: Record<Category, { label: string; subtitle: string; color
 
 const CATEGORY_ORDER: Category[] = ['authoritative', 'third_party', 'isp'];
 
+const SPAN_OPTIONS = [
+  { value: 60,    label: '1h' },
+  { value: 180,   label: '3h' },
+  { value: 720,   label: '12h' },
+  { value: 1440,  label: '24h' },
+  { value: 10080, label: '7d' },
+];
+
 async function apiFetch<T>(url: string): Promise<T> {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
   return r.json() as Promise<T>;
 }
 
+function fmtDt(ts: string | number | Date): string {
+  const d = new Date(ts instanceof Date ? ts : Number(ts) || ts);
+  const local = d.toLocaleString();
+  const y = d.getUTCFullYear();
+  const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const h = String(d.getUTCHours()).padStart(2, '0');
+  const m = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${local} (${y}-${mo}-${day} ${h}:${m} UTC)`;
+}
+
+// Convert a Date to the value string expected by <input type="datetime-local">
+function toDatetimeLocal(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 type DataSource = 'hosted' | 'contributor';
+type GroupBy = 'server' | 'domain';
+type RangeConfig = { span: number; endMs: number | null };
 
 // ── Summary cell state ────────────────────────────────────────
 
 type CellState = 'ok' | 'partial' | 'fail' | 'gap';
+type TimelineBucket = {
+  key: string;
+  runs: number[];
+  startRun: number;
+  endRun: number;
+};
+type TimelineTooltip = {
+  x: number;
+  y: number;
+  title: string;
+  detail: string;
+  state: CellState;
+};
+
+const MAX_TIMELINE_BUCKETS = 240;
 
 function summaryCellState(series: SeriesEntry[], runId: number): { state: CellState; failures: number; total: number } {
   let total = 0, failures = 0;
@@ -43,61 +85,148 @@ function summaryCellState(series: SeriesEntry[], runId: number): { state: CellSt
   return { state, failures, total };
 }
 
+function buildTimelineBuckets(runs: number[]): TimelineBucket[] {
+  const bucketCount = Math.min(runs.length, MAX_TIMELINE_BUCKETS);
+  if (bucketCount === 0) return [];
+
+  return Array.from({ length: bucketCount }, (_, i) => {
+    const start = Math.floor((i * runs.length) / bucketCount);
+    const end = Math.floor(((i + 1) * runs.length) / bucketCount);
+    const bucketRuns = runs.slice(start, Math.max(start + 1, end));
+    const startRun = bucketRuns[0];
+    const endRun = bucketRuns[bucketRuns.length - 1];
+    return {
+      key: `${startRun}-${endRun}`,
+      runs: bucketRuns,
+      startRun,
+      endRun,
+    };
+  });
+}
+
+function summaryBucketState(series: SeriesEntry[], bucket: TimelineBucket): { state: CellState; failures: number; total: number } {
+  let total = 0, failures = 0;
+  let hasOk = false, hasPartial = false, hasFail = false;
+
+  for (const runId of bucket.runs) {
+    const runState = summaryCellState(series, runId);
+    total += runState.total;
+    failures += runState.failures;
+    if (runState.state === 'ok') hasOk = true;
+    if (runState.state === 'partial') hasPartial = true;
+    if (runState.state === 'fail') hasFail = true;
+  }
+
+  if (total === 0) return { state: 'gap', failures: 0, total: 0 };
+  if (hasFail) return { state: 'fail', failures, total };
+  if (hasPartial) return { state: 'partial', failures, total };
+  return { state: hasOk ? 'ok' : 'gap', failures, total };
+}
+
+function timelineRangeTitle(bucket: TimelineBucket): string {
+  const start = fmtDt(bucket.startRun);
+  const end = fmtDt(bucket.endRun);
+  return bucket.startRun === bucket.endRun
+    ? start
+    : `${start} – ${end} (${bucket.runs.length} runs)`;
+}
+
+function formatCellDetail(state: CellState, failures: number, total: number): string {
+  if (state === 'gap' || total === 0) return 'No data';
+  if (failures === 0) return `All ${total} OK`;
+  return `${failures}/${total} failed`;
+}
+
 // ── Root app ──────────────────────────────────────────────────
 
 export default function App() {
-  const [history, setHistory]             = useState<HistoryData | null>(null);
+  const [history, setHistory]                 = useState<HistoryData | null>(null);
   const [contributorHistory, setContributorHistory] = useState<HistoryData | null>(null);
-  const [contributors, setContributors]   = useState<ContributorSummaryData | null>(null);
-  const [limit, setLimit]                 = useState(180);
-  const [auto, setAuto]                   = useState(true);
-  const [loading, setLoading]             = useState(true);
-  const [error, setError]                 = useState<string | null>(null);
-  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
-  const [detailSource, setDetailSource]   = useState<DataSource>('hosted');
-  const [detailOpen, setDetailOpen]       = useState(false);
-  const [groupBy, setGroupBy]             = useState<GroupBy>(
+  const [contributors, setContributors]       = useState<ContributorSummaryData | null>(null);
+  const [range, setRange]                     = useState<RangeConfig>(() => ({
+    span: parseInt(localStorage.getItem('dnscheck.span') ?? '180', 10) || 180,
+    endMs: null,
+  }));
+  const [auto, setAuto]                       = useState(true);
+  const [dataLoaded, setDataLoaded]           = useState(false);
+  const [rangeLoading, setRangeLoading]       = useState(true);
+  const [error, setError]                     = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId]     = useState<number | null>(null);
+  const [detailSource, setDetailSource]       = useState<DataSource>('hosted');
+  const [detailOpen, setDetailOpen]           = useState(false);
+  const [groupBy, setGroupBy]                 = useState<GroupBy>(
     () => (localStorage.getItem('dnscheck.groupBy') as GroupBy) ?? 'server'
   );
+  // Controlled value for the datetime-local input (local time string)
+  const [endInputValue, setEndInputValue]     = useState('');
 
   const load = useCallback(async () => {
     try {
       setError(null);
+      const beforeParam = range.endMs != null ? `&before=${range.endMs}` : '';
       const [h, ph, c] = await Promise.all([
-        apiFetch<HistoryData>(`/api/history?limit=${limit}`),
-        apiFetch<HistoryData>(`/api/contributors/history?limit=${limit}`),
-        apiFetch<ContributorSummaryData>(`/api/contributors/summary?minutes=${limit}`),
+        apiFetch<HistoryData>(`/api/history?limit=${range.span}${beforeParam}`),
+        apiFetch<HistoryData>(`/api/contributors/history?limit=${range.span}${beforeParam}`),
+        apiFetch<ContributorSummaryData>(`/api/contributors/summary?minutes=${range.span}${beforeParam}`),
       ]);
       setHistory(h);
       setContributorHistory(ph);
       setContributors(c);
+      setDataLoaded(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setLoading(false);
+      setRangeLoading(false);
     }
-  }, [limit]);
+  }, [range]);
 
-  useEffect(() => { void load(); }, [load]);
+  // Load on range change (shows spinner)
   useEffect(() => {
-    if (!auto) return;
+    setRangeLoading(true);
+    void load();
+  }, [load]);
+
+  // Auto-refresh — only when live (no fixed end time)
+  useEffect(() => {
+    if (!auto || range.endMs !== null) return;
     const t = setInterval(() => void load(), 30_000);
     return () => clearInterval(t);
-  }, [auto, load]);
-  useEffect(() => { localStorage.setItem('dnscheck.groupBy', groupBy); }, [groupBy]);
+  }, [auto, load, range.endMs]);
 
-  const handleCellClick = useCallback((source: DataSource, runId: number) => {
+  useEffect(() => { localStorage.setItem('dnscheck.groupBy', groupBy); }, [groupBy]);
+  useEffect(() => { localStorage.setItem('dnscheck.span', String(range.span)); }, [range.span]);
+
+  const handleDetailSourceChange = useCallback((source: DataSource) => {
     setDetailSource(source);
-    setSelectedRunId(runId);
-    setDetailOpen(true);
+    setSelectedRunId(null);
   }, []);
+
+  const handleEndTimeChange = useCallback((value: string) => {
+    setEndInputValue(value);
+    if (value === '') {
+      setRange(r => ({ ...r, endMs: null }));
+    } else {
+      const ms = new Date(value).getTime();
+      if (Number.isFinite(ms)) {
+        setRange(r => ({ ...r, endMs: ms }));
+      }
+    }
+  }, []);
+
+  const handleGoLive = useCallback(() => {
+    setEndInputValue('');
+    setRange(r => ({ ...r, endMs: null }));
+    setAuto(true);
+  }, []);
+
+  const isLive = range.endMs === null;
 
   const allSeries = history?.series ?? [];
   const lastRun   = history?.runs[history.runs.length - 1];
   const lastRunFails = lastRun != null ? allSeries.filter(s => s.results[lastRun]?.ok === false) : [];
   const authFail   = lastRunFails.filter(s => s.category === 'authoritative').length;
   const otherFail  = lastRunFails.filter(s => s.category !== 'authoritative').length;
-  const allOk      = !loading && !error && lastRun != null && lastRunFails.length === 0;
+  const allOk      = dataLoaded && !error && lastRun != null && lastRunFails.length === 0;
   const lastTs     = lastRun != null
     ? allSeries.flatMap(s => s.results[lastRun] ? [s.results[lastRun].ts] : [])[0]
     : null;
@@ -111,13 +240,14 @@ export default function App() {
       <header className="header">
         <div className="header-left">
           <h1>.co DNS Monitor</h1>
-          {lastTs && <span className="last-run">Last run: {new Date(lastTs).toLocaleString()}</span>}
+          {lastTs && <span className="last-run">Last run: {fmtDt(lastTs)}</span>}
         </div>
         <div className="header-right">
           {authFail > 0  && <span className="badge badge-fail">{authFail} auth failure{authFail !== 1 ? 's' : ''}</span>}
           {otherFail > 0 && <span className="badge badge-warn">{otherFail} resolver failure{otherFail !== 1 ? 's' : ''}</span>}
           {allOk         && <span className="badge badge-ok">All OK</span>}
-          {loading       && <span className="badge badge-muted">Loading…</span>}
+          {!dataLoaded && !error && <span className="badge badge-muted">Loading…</span>}
+          {!isLive       && <span className="badge badge-muted">Historical</span>}
         </div>
       </header>
 
@@ -125,20 +255,38 @@ export default function App() {
 
       <div className="controls">
         <label>
-          Window:{' '}
-          <select value={limit} onChange={e => setLimit(Number(e.target.value))}>
-            <option value={60}>60 runs (~1h)</option>
-            <option value={180}>180 runs (~3h)</option>
-            <option value={720}>720 runs (~12h)</option>
-            <option value={1440}>1440 runs (~24h)</option>
+          Span:{' '}
+          <select
+            value={range.span}
+            onChange={e => setRange(r => ({ ...r, span: Number(e.target.value) }))}
+          >
+            {SPAN_OPTIONS.map(o => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
           </select>
         </label>
-        <label className="checkbox-label">
-          <input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)} />
-          Auto-refresh 30s
+
+        <label>
+          End:{' '}
+          <input
+            type="datetime-local"
+            value={endInputValue}
+            max={toDatetimeLocal(new Date())}
+            onChange={e => handleEndTimeChange(e.target.value)}
+            className="end-time-input"
+          />
         </label>
+        {!isLive && (
+          <button onClick={handleGoLive} className="live-btn">↩ Live</button>
+        )}
+
+        {isLive && (
+          <label className="checkbox-label">
+            <input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)} />
+            Auto-refresh 30s
+          </label>
+        )}
         <button onClick={() => void load()}>Refresh</button>
-        <span className="hint">Click any cell to inspect that run</span>
         <label className="checkbox-label">
           Group by:
           <button
@@ -150,34 +298,37 @@ export default function App() {
         </label>
       </div>
 
-      {CATEGORY_ORDER.map(cat => (
+      <div className={`sections-wrapper${rangeLoading ? ' is-range-loading' : ''}`}>
+        {rangeLoading && <div className="loading-spinner" />}
+
+        {CATEGORY_ORDER.map(cat => (
+          <CategorySection
+            key={cat}
+            config={CATEGORY_CONFIG[cat]}
+            series={allSeries.filter(s => s.category === cat)}
+            runs={history?.runs ?? []}
+            lastRun={lastRun ?? null}
+            groupBy={groupBy}
+          />
+        ))}
+
         <CategorySection
-          key={cat}
-          config={CATEGORY_CONFIG[cat]}
-          series={allSeries.filter(s => s.category === cat)}
-          runs={history?.runs ?? []}
-          lastRun={lastRun ?? null}
-          onCellClick={runId => handleCellClick('hosted', runId)}
+          config={{ label: 'Publisher Uploads', subtitle: 'Contributor DNS', color: '#475569' }}
+          series={publisherSeries}
+          runs={publisherRuns}
+          lastRun={publisherLastRun}
           groupBy={groupBy}
+          emptyText="No publisher uploads in this window"
         />
-      ))}
 
-      <CategorySection
-        config={{ label: 'Publisher Uploads', subtitle: 'Contributor DNS', color: '#475569' }}
-        series={publisherSeries}
-        runs={publisherRuns}
-        lastRun={publisherLastRun}
-        onCellClick={runId => handleCellClick('contributor', runId)}
-        groupBy={groupBy}
-        emptyText="No publisher uploads in this window"
-      />
-
-      <ContributorSection data={contributors} />
+        <ContributorSection data={contributors} />
+      </div>
 
       <DetailSection
         open={detailOpen}
         onToggle={() => setDetailOpen(o => !o)}
         source={detailSource}
+        onSourceChange={handleDetailSourceChange}
         selectedRunId={selectedRunId}
         availableRuns={detailRuns}
         onRunChange={setSelectedRunId}
@@ -207,7 +358,7 @@ function ContributorSection({ data }: { data: ContributorSummaryData | null }) {
         <span className="category-subtitle">Last {data?.minutes ?? '...'} minutes</span>
         {lastTs && (
           <span className="category-stats">
-            Last upload: {new Date(lastTs).toLocaleString()}
+            Last upload: {fmtDt(lastTs)}
           </span>
         )}
       </div>
@@ -255,7 +406,7 @@ function ContributorProvider({ provider, rows }: { provider: string; rows: Contr
           <span className={failures > 0 ? 'stat-fail' : 'stat-ok'}>
             {failures} failure{failures !== 1 ? 's' : ''}
           </span>
-          {lastTs && <span>{new Date(lastTs).toLocaleString()}</span>}
+          {lastTs && <span>{fmtDt(lastTs)}</span>}
         </div>
       </div>
 
@@ -278,7 +429,7 @@ function ContributorProvider({ provider, rows }: { provider: string; rows: Contr
                   <td className={asCount(r.failures) > 0 ? 'status-fail' : 'status-ok'}>{r.failures}</td>
                   <td>{r.median_ms ?? ''}</td>
                   <td className="error-cell">{r.common_error ?? ''}</td>
-                  <td>{new Date(r.last_ts).toLocaleString()}</td>
+                  <td className="ts-cell">{fmtDt(r.last_ts)}</td>
                 </tr>
               ))}
             </tbody>
@@ -292,13 +443,12 @@ function ContributorProvider({ provider, rows }: { provider: string; rows: Contr
 // ── Category section ──────────────────────────────────────────
 
 function CategorySection({
-  config, series, runs, lastRun, onCellClick, groupBy, emptyText = 'No data yet — first poll pending',
+  config, series, runs, lastRun, groupBy, emptyText = 'No data yet — first poll pending',
 }: {
   config: { label: string; subtitle: string; color: string };
   series: SeriesEntry[];
   runs: number[];
   lastRun: number | null;
-  onCellClick: (runId: number) => void;
   groupBy: GroupBy;
   emptyText?: string;
 }) {
@@ -327,7 +477,6 @@ function CategorySection({
               provider={provider}
               series={series.filter(s => s.provider === provider)}
               runs={runs}
-              onCellClick={onCellClick}
               groupBy={groupBy}
             />
           ))
@@ -335,8 +484,6 @@ function CategorySection({
     </section>
   );
 }
-
-type GroupBy = 'server' | 'domain';
 
 const TLD_ORDER = ['co', 'com', 'net', 'org'];
 const getTld    = (domain: string) => domain.split('.').pop() ?? '';
@@ -348,22 +495,23 @@ const tldRank   = (domain: string) => {
 // ── Provider group (collapsible) ──────────────────────────────
 
 function ProviderGroup({
-  provider, series, runs, onCellClick, groupBy,
+  provider, series, runs, groupBy,
 }: {
   provider: string;
   series: SeriesEntry[];
   runs: number[];
-  onCellClick: (runId: number) => void;
   groupBy: GroupBy;
 }) {
   const [expanded,    setExpanded]    = useState(false);
   const [showHealthy, setShowHealthy] = useState(false);
+  const [tooltip, setTooltip] = useState<TimelineTooltip | null>(null);
 
   const failingSeries = useMemo(
     () => series.filter(s => runs.some(r => s.results[r]?.ok === false)),
     [series, runs],
   );
   const healthyCount = series.length - failingSeries.length;
+  const timelineBuckets = useMemo(() => buildTimelineBuckets(runs), [runs]);
 
   const sortedSeries = useMemo(() => {
     const base = showHealthy ? series : failingSeries;
@@ -381,6 +529,17 @@ function ProviderGroup({
   // Spacers go between servers (by-server mode) or between TLDs (by-domain mode).
   const primaryKey = (s: SeriesEntry) =>
     groupBy === 'server' ? s.server : getTld(s.domain);
+  const showTooltip = useCallback((e: MouseEvent<HTMLElement>, nextTooltip: Omit<TimelineTooltip, 'x' | 'y'>) => {
+    setTooltip({
+      ...nextTooltip,
+      x: e.clientX,
+      y: e.clientY,
+    });
+  }, []);
+  const moveTooltip = useCallback((e: MouseEvent<HTMLElement>) => {
+    setTooltip(current => current ? { ...current, x: e.clientX, y: e.clientY } : current);
+  }, []);
+  const hideTooltip = useCallback(() => setTooltip(null), []);
 
   return (
     <div className={`provider-group${expanded ? ' is-expanded' : ''}`}>
@@ -391,8 +550,15 @@ function ProviderGroup({
           <span className="summary-label">{provider}</span>
         </div>
         <div className="summary-cells">
-          {runs.map(r => (
-            <SummaryCell key={r} runId={r} series={series} onCellClick={onCellClick} />
+          {timelineBuckets.map(bucket => (
+            <SummaryCell
+              key={bucket.key}
+              bucket={bucket}
+              series={series}
+              onTooltipShow={showTooltip}
+              onTooltipMove={moveTooltip}
+              onTooltipHide={hideTooltip}
+            />
           ))}
         </div>
       </div>
@@ -407,9 +573,11 @@ function ProviderGroup({
               )}
               <HeatmapRow
                 series={s}
-                runs={runs}
-                onCellClick={onCellClick}
+                buckets={timelineBuckets}
                 groupBy={groupBy}
+                onTooltipShow={showTooltip}
+                onTooltipMove={moveTooltip}
+                onTooltipHide={hideTooltip}
               />
             </div>
           ))}
@@ -430,6 +598,7 @@ function ProviderGroup({
           )}
         </div>
       )}
+      {tooltip && <TimelineHoverTooltip tooltip={tooltip} />}
     </div>
   );
 }
@@ -437,21 +606,25 @@ function ProviderGroup({
 // ── Summary cell (aggregated) ─────────────────────────────────
 
 const SummaryCell = memo(function SummaryCell({
-  runId, series, onCellClick,
+  bucket, series, onTooltipShow, onTooltipMove, onTooltipHide,
 }: {
-  runId: number;
+  bucket: TimelineBucket;
   series: SeriesEntry[];
-  onCellClick: (runId: number) => void;
+  onTooltipShow: (e: MouseEvent<HTMLElement>, tooltip: Omit<TimelineTooltip, 'x' | 'y'>) => void;
+  onTooltipMove: (e: MouseEvent<HTMLElement>) => void;
+  onTooltipHide: () => void;
 }) {
-  const { state, failures, total } = summaryCellState(series, runId);
-  const title = state === 'gap' ? `run ${runId} — no data`
-    : failures === 0 ? `All ${total} OK`
-    : `${failures}/${total} failed`;
+  const { state, failures, total } = summaryBucketState(series, bucket);
+  const range = timelineRangeTitle(bucket);
+  const detail = formatCellDetail(state, failures, total);
+  const title = `${range} - ${detail}`;
   return (
     <span
       className={`cell cell-${state}`}
       title={title}
-      onClick={e => { e.stopPropagation(); onCellClick(runId); }}
+      onMouseEnter={e => onTooltipShow(e, { title: range, detail, state })}
+      onMouseMove={onTooltipMove}
+      onMouseLeave={onTooltipHide}
     />
   );
 });
@@ -459,12 +632,14 @@ const SummaryCell = memo(function SummaryCell({
 // ── Individual heatmap row ────────────────────────────────────
 
 function HeatmapRow({
-  series, runs, onCellClick, groupBy,
+  series, buckets, groupBy, onTooltipShow, onTooltipMove, onTooltipHide,
 }: {
   series: SeriesEntry;
-  runs: number[];
-  onCellClick: (runId: number) => void;
+  buckets: TimelineBucket[];
   groupBy: GroupBy;
+  onTooltipShow: (e: MouseEvent<HTMLElement>, tooltip: Omit<TimelineTooltip, 'x' | 'y'>) => void;
+  onTooltipMove: (e: MouseEvent<HTMLElement>) => void;
+  onTooltipHide: () => void;
 }) {
   const primary   = groupBy === 'server' ? series.server : series.domain;
   const secondary = groupBy === 'server' ? series.domain : series.server;
@@ -473,17 +648,36 @@ function HeatmapRow({
       <div className="row-primary"   title={primary}>{primary}</div>
       <div className="row-secondary" title={secondary}>{secondary}</div>
       <div className="row-cells">
-        {runs.map(r => {
-          const v = series.results[r];
-          if (!v) return <span key={r} className="cell cell-gap" title={`run ${r} — no data`} />;
-          const ts    = new Date(v.ts).toLocaleString();
-          const title = `${ts} — ${v.ok ? 'OK' : 'FAIL'} ${v.ms ?? '?'}ms${v.error ? ` (${v.error})` : ''}\nClick to inspect`;
+        {buckets.map(bucket => {
+          const values = bucket.runs.map(r => series.results[r]).filter(Boolean);
+          const range = timelineRangeTitle(bucket);
+          if (values.length === 0) {
+            const detail = formatCellDetail('gap', 0, 0);
+            return (
+              <span
+                key={bucket.key}
+                className="cell cell-gap"
+                title={`${range} - ${detail}`}
+                onMouseEnter={e => onTooltipShow(e, { title: range, detail, state: 'gap' })}
+                onMouseMove={onTooltipMove}
+                onMouseLeave={onTooltipHide}
+              />
+            );
+          }
+
+          const failures = values.filter(v => !v.ok);
+          const failingValue = failures[failures.length - 1];
+          const state = failures.length > 0 ? 'fail' : 'ok';
+          const detail = formatCellDetail(state, failures.length, values.length);
+          const title = `${range} - ${detail}${failingValue?.error ? ` (${failingValue.error})` : ''}`;
           return (
             <span
-              key={r}
-              className={`cell ${v.ok ? 'cell-ok' : 'cell-fail'}`}
+              key={bucket.key}
+              className={`cell cell-${state}`}
               title={title}
-              onClick={() => onCellClick(r)}
+              onMouseEnter={e => onTooltipShow(e, { title: range, detail, state })}
+              onMouseMove={onTooltipMove}
+              onMouseLeave={onTooltipHide}
             />
           );
         })}
@@ -492,14 +686,32 @@ function HeatmapRow({
   );
 }
 
+function TimelineHoverTooltip({ tooltip }: { tooltip: TimelineTooltip }) {
+  const width = Math.min(300, window.innerWidth - 24);
+  const x = Math.min(Math.max(tooltip.x, 12 + width / 2), window.innerWidth - 12 - width / 2);
+  const y = Math.max(tooltip.y, 56);
+
+  return (
+    <div
+      className={`timeline-tooltip tooltip-${tooltip.state}`}
+      style={{ left: x, top: y }}
+      role="tooltip"
+    >
+      <div className="tooltip-range">{tooltip.title}</div>
+      <div className="tooltip-detail">{tooltip.detail}</div>
+    </div>
+  );
+}
+
 // ── Detail section (lazy) ─────────────────────────────────────
 
 function DetailSection({
-  open, onToggle, source, selectedRunId, availableRuns, onRunChange,
+  open, onToggle, source, onSourceChange, selectedRunId, availableRuns, onRunChange,
 }: {
   open: boolean;
   onToggle: () => void;
   source: DataSource;
+  onSourceChange: (source: DataSource) => void;
   selectedRunId: number | null;
   availableRuns: number[];
   onRunChange: (runId: number) => void;
@@ -512,8 +724,15 @@ function DetailSection({
   const effectiveKey = effectiveRunId === null ? null : `${source}:${effectiveRunId}`;
 
   useEffect(() => {
-    if (!open || effectiveRunId === null || effectiveKey === loadedKey) return;
+    if (!open) return;
+    if (effectiveRunId === null) {
+      setData(null);
+      setLoadedKey(null);
+      return;
+    }
+    if (effectiveKey === loadedKey) return;
     setLoading(true);
+    setData(null);
     const baseUrl = source === 'contributor' ? '/api/contributors/latest' : '/api/latest';
     const url = selectedRunId != null ? `${baseUrl}?run_id=${selectedRunId}` : baseUrl;
     apiFetch<LatestData>(url)
@@ -522,7 +741,7 @@ function DetailSection({
       .finally(() => setLoading(false));
   }, [open, source, effectiveRunId, effectiveKey, loadedKey, selectedRunId]);
 
-  const displayTs = data?.ts ? new Date(data.ts).toLocaleString() : null;
+  const displayTs = data?.ts ? fmtDt(data.ts) : null;
 
   return (
     <section className="detail-section">
@@ -532,13 +751,23 @@ function DetailSection({
         <span className="toggle-hint">{source === 'contributor' ? 'publisher' : 'hosted'}</span>
         {!open && displayTs && <span className="toggle-hint">{displayTs}</span>}
         {!open && !displayTs && availableRuns.length > 0 && (
-          <span className="toggle-hint">click to inspect a run</span>
+          <span className="toggle-hint">latest run</span>
         )}
       </button>
 
       {open && (
         <div className="detail-body">
           <div className="detail-controls">
+            <label>
+              Source:{' '}
+              <select
+                value={source}
+                onChange={e => onSourceChange(e.target.value as DataSource)}
+              >
+                <option value="hosted">Hosted</option>
+                <option value="contributor">Publisher</option>
+              </select>
+            </label>
             <label>
               Run:{' '}
               <select
@@ -547,7 +776,7 @@ function DetailSection({
               >
                 {[...availableRuns].reverse().map(r => (
                   <option key={r} value={r}>
-                    {new Date(r).toLocaleString()} ({r})
+                    {fmtDt(r)}
                   </option>
                 ))}
               </select>
