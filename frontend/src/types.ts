@@ -9,6 +9,7 @@ export interface ProbeRow {
   ok: boolean;
   ms: number | null;
   ns_count: number | null;
+  nsid: string | null;
   error: string | null;
 }
 
@@ -16,6 +17,7 @@ export interface ProbeResult {
   ok: boolean;
   ms: number | null;
   ts: string;
+  nsid: string | null;
   error: string | null;
 }
 
@@ -24,6 +26,7 @@ export interface SeriesEntry {
   provider: string;
   server: string;
   domain: string;
+  nsid: string | null;
   results: Record<number, ProbeResult>;
 }
 
@@ -47,6 +50,7 @@ export interface ContributorSummaryRow {
   rows: string | number;
   failures: string | number;
   median_ms: number | null;
+  nsid: string | null;
   common_error: string | null;
   last_ts: string;
 }

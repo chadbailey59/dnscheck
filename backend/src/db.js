@@ -48,6 +48,7 @@ async function initDb() {
         ok         BOOLEAN     NOT NULL,
         ms         INTEGER,
         ns_count   INTEGER,
+        nsid       TEXT,
         error      TEXT,
         contributor_id UUID,
         source     TEXT        NOT NULL DEFAULT 'hosted',
@@ -56,6 +57,7 @@ async function initDb() {
       ALTER TABLE probes ADD COLUMN IF NOT EXISTS contributor_id UUID;
       ALTER TABLE probes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'hosted';
       ALTER TABLE probes ADD COLUMN IF NOT EXISTS upload_id UUID;
+      ALTER TABLE probes ADD COLUMN IF NOT EXISTS nsid TEXT;
       UPDATE probes SET source = 'contributor' WHERE contributor_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_probes_run    ON probes(run_id);
       CREATE INDEX IF NOT EXISTS idx_probes_ts     ON probes(ts);
@@ -81,16 +83,16 @@ async function insertProbes(rows) {
   const client = await pool().connect();
   try {
     const values = rows.map((r, i) => {
-      const base = i * 13;
-      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10},$${base+11},$${base+12},$${base+13})`;
+      const base = i * 14;
+      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10},$${base+11},$${base+12},$${base+13},$${base+14})`;
     }).join(',');
     const params = rows.flatMap(r => [
       r.ts, r.run_id, r.category, r.provider, r.server, r.domain,
-      r.ok, r.ms, r.ns_count, r.error, r.contributor_id ?? null,
-      r.source ?? 'hosted', r.upload_id ?? null,
+      r.ok, r.ms, r.ns_count, r.nsid ?? null, r.error,
+      r.contributor_id ?? null, r.source ?? 'hosted', r.upload_id ?? null,
     ]);
     const result = await client.query(
-      `INSERT INTO probes(ts,run_id,category,provider,server,domain,ok,ms,ns_count,error,contributor_id,source,upload_id) VALUES ${values}
+      `INSERT INTO probes(ts,run_id,category,provider,server,domain,ok,ms,ns_count,nsid,error,contributor_id,source,upload_id) VALUES ${values}
        ON CONFLICT DO NOTHING`,
       params,
     );
@@ -126,6 +128,7 @@ async function getContributorLatest(runId = null) {
          provider,
          server,
          domain,
+         nsid,
          BOOL_AND(ok) AS ok,
          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ms) FILTER (WHERE ms IS NOT NULL))::INTEGER AS ms,
          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ns_count) FILTER (WHERE ns_count IS NOT NULL))::INTEGER AS ns_count,
@@ -133,8 +136,8 @@ async function getContributorLatest(runId = null) {
        FROM probes
        WHERE source = 'contributor'
          AND run_id = $1::BIGINT
-       GROUP BY category, provider, server, domain
-       ORDER BY category, provider, server, domain`,
+       GROUP BY category, provider, server, domain, nsid
+       ORDER BY category, provider, server, domain, nsid`,
       [targetRunId],
     );
     return { ts: rows[0]?.ts ?? null, run_id: String(targetRunId), rows };
@@ -155,9 +158,9 @@ async function getLatest(runId = null, source = 'hosted') {
     }
     if (!targetRunId) return { ts: null, run_id: null, rows: [] };
     const { rows } = await client.query(
-      `SELECT ts, category, provider, server, domain, ok, ms, ns_count, error
+      `SELECT ts, category, provider, server, domain, ok, ms, ns_count, nsid, error
        FROM probes WHERE run_id = $1 AND source = $2
-       ORDER BY category, provider, server, domain`,
+       ORDER BY category, provider, server, domain, nsid`,
       [targetRunId, source],
     );
     return { ts: rows[0]?.ts ?? null, run_id: String(targetRunId), rows };
@@ -194,13 +197,14 @@ async function getContributorHistory(limit, beforeMs = null) {
          provider,
          server,
          domain,
+         nsid,
          BOOL_AND(ok) AS ok,
          ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ms) FILTER (WHERE ms IS NOT NULL))::INTEGER AS ms,
          MODE() WITHIN GROUP (ORDER BY error) FILTER (WHERE error IS NOT NULL) AS error
        FROM probes
        WHERE source = 'contributor'
          AND run_id = ANY($1::BIGINT[])
-       GROUP BY run_id, category, provider, server, domain`,
+       GROUP BY run_id, category, provider, server, domain, nsid`,
       [runs],
     );
 
@@ -213,13 +217,14 @@ async function getContributorHistory(limit, beforeMs = null) {
 function rowsToHistory(runs, rows) {
   const seriesMap = new Map();
   for (const r of rows) {
-    const key = `${r.category}\x00${r.provider}\x00${r.server}\x00${r.domain}`;
+    const key = `${r.category}\x00${r.provider}\x00${r.server}\x00${r.domain}\x00${r.nsid ?? ''}`;
     if (!seriesMap.has(key)) {
       seriesMap.set(key, {
         category: r.category,
         provider: r.provider,
         server: r.server,
         domain: r.domain,
+        nsid: r.nsid,
         results: {},
       });
     }
@@ -227,6 +232,7 @@ function rowsToHistory(runs, rows) {
       ok: r.ok,
       ms: r.ms,
       ts: r.ts,
+      nsid: r.nsid,
       error: r.error,
     };
   }
@@ -252,7 +258,7 @@ async function getHistory(limit, source = 'hosted', beforeMs = null) {
     if (runs.length === 0) return { runs: [], series: [] };
 
     const { rows } = await client.query(
-      `SELECT run_id, ts, category, provider, server, domain, ok, ms, error
+      `SELECT run_id, ts, category, provider, server, domain, nsid, ok, ms, error
        FROM probes WHERE run_id = ANY($1) AND source = $2`,
       [runs, source],
     );
@@ -279,6 +285,7 @@ async function getContributorSummary(minutes = 60, beforeMs = null) {
          provider,
          server,
          domain,
+         nsid,
          COUNT(DISTINCT COALESCE(upload_id::TEXT, run_id::TEXT)) AS uploads,
          COUNT(DISTINCT contributor_id) AS contributors,
          COUNT(*) AS rows,
@@ -289,8 +296,8 @@ async function getContributorSummary(minutes = 60, beforeMs = null) {
        FROM probes
        WHERE source = 'contributor'
          AND ${timeCondition}
-       GROUP BY provider, server, domain
-       ORDER BY provider, server, domain`,
+       GROUP BY provider, server, domain, nsid
+       ORDER BY provider, server, domain, nsid`,
       params,
     );
     return { minutes, rows };

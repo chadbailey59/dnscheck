@@ -188,11 +188,11 @@ h1 {
 .provider-group:last-child { border-bottom: none; }
 
 /* Both summary row and heatmap rows share the same two-column grid so cells align. */
-/* Column widths must match .heatmap-row exactly: 175px | 115px | 1fr              */
+/* Column widths must match .heatmap-row exactly: 175px | 190px | 1fr              */
 
 .provider-summary {
   display: grid;
-  grid-template-columns: calc(175px + 0.5rem + 115px) minmax(0, 1fr);
+  grid-template-columns: calc(175px + 0.5rem + 190px) minmax(0, 1fr);
   gap: 0.5rem;
   align-items: center;
   width: 100%;
@@ -290,7 +290,7 @@ h1 {
 }
 
 .contributor-table table {
-  min-width: 760px;
+  min-width: 920px;
 }
 
 /* Detail rows shown when expanded */
@@ -323,7 +323,7 @@ h1 {
 
 .heatmap-row {
   display: grid;
-  grid-template-columns: 175px 115px minmax(0, 1fr);
+  grid-template-columns: 175px 190px minmax(0, 1fr);
   align-items: center;
   gap: 0.5rem;
   padding: 2px 1rem;
@@ -339,7 +339,33 @@ h1 {
 }
 
 .row-primary   { color: #334155; }
-.row-secondary { color: #64748b; }
+.row-secondary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #64748b;
+}
+
+.secondary-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.instance-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 4px;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 10px;
+  line-height: 1.25;
+}
 
 .group-spacer {
   height: 6px;
@@ -541,6 +567,13 @@ tr:last-child td { border-bottom: none; }
 .mono {
   font-family: ui-monospace, 'Cascadia Code', monospace;
   font-size: 11px;
+}
+
+.nsid-cell {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tag {

@@ -5,6 +5,13 @@ const { POLL_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, TIMEOUT_SECS } = require('./c
 const { insertProbes } = require('./db');
 
 const STATUS_RE = /status:\s*([A-Z]+)/;
+const NSID_RE = /;\s*NSID:\s*([0-9A-Fa-f ]+)(?:\s*\("([^"]+)"\))?/;
+
+function parseNsid(output) {
+  const m = NSID_RE.exec(output);
+  if (!m) return null;
+  return m[2] ?? m[1].trim().replace(/\s+/g, ' ');
+}
 
 // Never rejects — resolves with { exitCode, stdout, stderr, timedOut }.
 function runDig(args, timeoutMs) {
@@ -27,32 +34,33 @@ async function probe(server, domain) {
   const { exitCode, stdout, stderr, timedOut } = await runDig(
     [
       '+tries=1', `+time=${TIMEOUT_SECS}`,
-      '+noall', '+answer', '+authority', '+comments',
+      '+noall', '+answer', '+authority', '+comments', '+nsid',
       ...resolverArgs, domain, 'NS',
     ],
     (TIMEOUT_SECS + 2) * 1000,
   );
   const ms = Date.now() - start;
   const out = stdout + stderr;
+  const nsid = parseNsid(out);
 
   if (timedOut || exitCode === 9 || out.includes('connection timed out')) {
-    return { ok: false, ms, ns_count: null, error: 'timeout' };
+    return { ok: false, ms, ns_count: null, nsid, error: 'timeout' };
   }
   if (exitCode !== 0) {
     const m = STATUS_RE.exec(out);
     const rcode = m ? m[1] : `exit=${exitCode}`;
-    return { ok: false, ms, ns_count: null, error: rcode === 'NOERROR' ? `exit=${exitCode}` : rcode };
+    return { ok: false, ms, ns_count: null, nsid, error: rcode === 'NOERROR' ? `exit=${exitCode}` : rcode };
   }
   const m = STATUS_RE.exec(out);
   const rcode = m ? m[1] : '';
   if (rcode && rcode !== 'NOERROR') {
-    return { ok: false, ms, ns_count: null, error: `rcode=${rcode}` };
+    return { ok: false, ms, ns_count: null, nsid, error: `rcode=${rcode}` };
   }
   const nsPat = new RegExp(
     `^${domain.replace(/\./g, '\\.')}\\.\\s+\\d+\\s+IN\\s+NS`, 'gm',
   );
   const ns_count = (out.match(nsPat) ?? []).length;
-  return { ok: true, ms, ns_count, error: null };
+  return { ok: true, ms, ns_count, nsid, error: null };
 }
 
 async function runOnce() {

@@ -389,6 +389,7 @@ function ContributorProvider({ provider, rows }: { provider: string; rows: Contr
 
   const sortedRows = useMemo(() => [...rows].sort((a, b) =>
     a.server.localeCompare(b.server)
+      || nsidRank(a.nsid).localeCompare(nsidRank(b.nsid))
       || tldRank(a.domain) - tldRank(b.domain)
       || a.domain.localeCompare(b.domain)
   ), [rows]);
@@ -415,14 +416,15 @@ function ContributorProvider({ provider, rows }: { provider: string; rows: Contr
           <table>
             <thead>
               <tr>
-                <th>Server</th><th>Domain</th><th>Uploads</th><th>Rows</th>
+                <th>Server</th><th>Instance</th><th>Domain</th><th>Uploads</th><th>Rows</th>
                 <th>Failures</th><th>Median ms</th><th>Common Error</th><th>Last Upload</th>
               </tr>
             </thead>
             <tbody>
               {sortedRows.map(r => (
-                <tr key={`${r.server}\x00${r.domain}`} className={asCount(r.failures) > 0 ? 'row-fail' : ''}>
+                <tr key={`${r.server}\x00${r.domain}\x00${r.nsid ?? ''}`} className={asCount(r.failures) > 0 ? 'row-fail' : ''}>
                   <td className="mono">{r.server}</td>
+                  <td className="mono nsid-cell">{r.nsid ?? ''}</td>
                   <td className="mono">{r.domain}</td>
                   <td>{r.uploads}</td>
                   <td>{r.rows}</td>
@@ -491,6 +493,7 @@ const tldRank   = (domain: string) => {
   const i = TLD_ORDER.indexOf(getTld(domain));
   return i === -1 ? TLD_ORDER.length : i;
 };
+const nsidRank = (nsid: string | null) => nsid ?? '';
 
 // ── Provider group (collapsible) ──────────────────────────────
 
@@ -518,11 +521,13 @@ function ProviderGroup({
     return [...base].sort((a, b) =>
       groupBy === 'server'
         ? a.server.localeCompare(b.server)
+            || nsidRank(a.nsid).localeCompare(nsidRank(b.nsid))
             || tldRank(a.domain) - tldRank(b.domain)
             || a.domain.localeCompare(b.domain)
         : tldRank(a.domain) - tldRank(b.domain)
             || a.domain.localeCompare(b.domain)
-            || a.server.localeCompare(b.server),
+            || a.server.localeCompare(b.server)
+            || nsidRank(a.nsid).localeCompare(nsidRank(b.nsid)),
     );
   }, [series, failingSeries, showHealthy, groupBy]);
 
@@ -567,7 +572,7 @@ function ProviderGroup({
       {expanded && (
         <div className="provider-detail">
           {sortedSeries.map((s, i) => (
-            <div key={`${s.server}\x00${s.domain}`}>
+            <div key={`${s.server}\x00${s.domain}\x00${s.nsid ?? ''}`}>
               {i > 0 && primaryKey(s) !== primaryKey(sortedSeries[i - 1]) && (
                 <div className="group-spacer" />
               )}
@@ -643,10 +648,14 @@ function HeatmapRow({
 }) {
   const primary   = groupBy === 'server' ? series.server : series.domain;
   const secondary = groupBy === 'server' ? series.domain : series.server;
+  const secondaryTitle = series.nsid ? `${secondary} | NSID ${series.nsid}` : secondary;
   return (
     <div className="heatmap-row">
       <div className="row-primary"   title={primary}>{primary}</div>
-      <div className="row-secondary" title={secondary}>{secondary}</div>
+      <div className="row-secondary" title={secondaryTitle}>
+        <span className="secondary-label">{secondary}</span>
+        {series.nsid && <span className="instance-chip">{series.nsid}</span>}
+      </div>
       <div className="row-cells">
         {buckets.map(bucket => {
           const values = bucket.runs.map(r => series.results[r]).filter(Boolean);
@@ -668,7 +677,8 @@ function HeatmapRow({
           const failures = values.filter(v => !v.ok);
           const failingValue = failures[failures.length - 1];
           const state = failures.length > 0 ? 'fail' : 'ok';
-          const detail = formatCellDetail(state, failures.length, values.length);
+          const detailBase = formatCellDetail(state, failures.length, values.length);
+          const detail = series.nsid ? `${detailBase} | NSID ${series.nsid}` : detailBase;
           const title = `${range} - ${detail}${failingValue?.error ? ` (${failingValue.error})` : ''}`;
           return (
             <span
@@ -805,7 +815,7 @@ function RunTable({ rows }: { rows: ProbeRow[] }) {
       <table>
         <thead>
           <tr>
-            <th>Category</th><th>Provider</th><th>Server</th><th>Domain</th>
+            <th>Category</th><th>Provider</th><th>Server</th><th>Instance</th><th>Domain</th>
             <th>Status</th><th>ms</th><th>NS</th><th>Error</th>
           </tr>
         </thead>
@@ -816,6 +826,7 @@ function RunTable({ rows }: { rows: ProbeRow[] }) {
                 <td><span className={`tag tag-${cat}`}>{cat.replace('_', '-')}</span></td>
                 <td>{r.provider}</td>
                 <td className="mono">{r.server}</td>
+                <td className="mono nsid-cell">{r.nsid ?? ''}</td>
                 <td className="mono">{r.domain}</td>
                 <td className={r.ok ? 'status-ok' : 'status-fail'}>{r.ok ? 'OK' : 'FAIL'}</td>
                 <td>{r.ms ?? ''}</td>

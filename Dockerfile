@@ -22,7 +22,7 @@ CMD ["node", "src/contributor.js"]
 
 # Stage 3: production backend
 FROM node:20-slim AS app
-RUN apt-get update && apt-get install -y --no-install-recommends dnsutils && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends dnsutils traceroute && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
 # Install backend dependencies

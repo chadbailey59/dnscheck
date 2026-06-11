@@ -51,3 +51,29 @@ docker run --rm --network host dnscheck-contributor
 ```
 
 More options are documented in [CONTRIBUTOR.md](CONTRIBUTOR.md).
+
+## Anycast Diagnostics
+
+To test whether `.co` authoritative results differ because local and hosted
+probes are routed to different anycast instances, run:
+
+```sh
+cd backend
+npm run anycast
+```
+
+The command queries the direct `.co` registry IPs with `dig +nsid` and prints
+JSON containing the backend NSID, query latency, and a short route sample when
+`tracepath` or `traceroute` is available.
+
+Run the same command from a Render shell or one-off job after deploying. If the
+local and Render runs show different `nsid_text` values, they are reaching
+different authoritative backends. If only one origin fails and its NSID or route
+is different, that supports the anycast-routing hypothesis.
+
+Optional overrides:
+
+```sh
+ANYCAST_DOMAIN=hinge.co npm run anycast
+ANYCAST_TARGETS=194.169.218.57,212.18.248.57 npm run anycast
+```

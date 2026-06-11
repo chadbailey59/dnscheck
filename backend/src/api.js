@@ -90,6 +90,7 @@ function normalizeUpload(body) {
       ok: row.ok,
       ms: asNullableInteger(row.ms, `rows[${index}].ms`),
       ns_count: asNullableInteger(row.ns_count, `rows[${index}].ns_count`),
+      nsid: asOptionalString(row.nsid, `rows[${index}].nsid`, 255),
       error: asOptionalString(row.error, `rows[${index}].error`, 255),
       contributor_id,
       source: 'contributor',
@@ -169,7 +170,7 @@ function createApp() {
         const domains = category === 'authoritative' ? (DOMAINS_BY_TLD[tld] ?? ALL_DOMAINS) : ALL_DOMAINS;
         for (const domain of domains) {
           if (!seenKeys.has(`${server}\x00${domain}`)) {
-            result.series.push({ category, provider, server, domain, results: {} });
+            result.series.push({ category, provider, server, domain, nsid: null, results: {} });
           }
         }
       }
