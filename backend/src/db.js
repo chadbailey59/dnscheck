@@ -266,7 +266,72 @@ function rowsToHistory(runs, rows) {
   return { runs, series: [...seriesMap.values()] };
 }
 
+// Spans wider than this (in runs/minutes) are served from probes_summary rather
+// than scanning raw probes — raw only retains a few days and millions of rows
+// would otherwise cross the wire. 1440 = 24h, so only the 7d view crosses over.
+const WIDE_SPAN_THRESHOLD = 1440;
+const SUMMARY_GRID_BUCKETS = 240; // matches the frontend's MAX_TIMELINE_BUCKETS
+
+// Wide-window history from run-length-encoded segments. Buckets the window into
+// a fixed time grid and fills each (bucket, server, domain) cell with the
+// worst-case pass/fail over every segment overlapping it, plus the still-unsealed
+// raw tail (run_id beyond the summary watermark). Returns the same {runs, series}
+// shape as getHistory so the frontend renders it identically.
+//
+// At this zoom the anycast instance (nsid) is collapsed: one row per server+domain
+// (a single failing instance still reddens the cell via worst-case bool_and). Full
+// per-nsid detail is retained in the data and shown in the <=24h views and Run
+// Detail; carrying it here would mean ~2,700 series instead of ~400.
+async function getHistorySummaryGrid(limit, source, beforeMs = null) {
+  const client = await pool().connect();
+  try {
+    const endMs = beforeMs != null ? Number(beforeMs) : Date.now();
+    const startMs = endMs - limit * 60000;
+    const nb = SUMMARY_GRID_BUCKETS;
+    const { rows } = await client.query(
+      `WITH buckets AS (
+         SELECT g AS idx,
+                $1::bigint + (($2::bigint - $1::bigint) * g)     / $3 AS b_lo,
+                $1::bigint + (($2::bigint - $1::bigint) * (g + 1)) / $3 AS b_hi
+         FROM generate_series(0, $3 - 1) AS g
+       ),
+       wm AS (SELECT COALESCE(max(end_run_id), 0) AS v FROM probes_summary WHERE source = $4),
+       cells AS (
+         SELECT b.b_lo, s.category, s.provider, s.server, s.domain, s.ok, s.error
+         FROM buckets b
+         JOIN probes_summary s
+           ON s.source = $4
+          AND s.start_run_id < b.b_hi AND s.end_run_id >= b.b_lo
+         UNION ALL
+         SELECT b.b_lo, p.category, p.provider, p.server, p.domain, p.ok, p.error
+         FROM buckets b
+         JOIN probes p
+           ON p.source = $4
+          AND p.run_id > (SELECT v FROM wm)
+          AND p.run_id >= b.b_lo AND p.run_id < b.b_hi
+       )
+       SELECT b_lo AS run_id,
+              to_timestamp(b_lo / 1000.0) AS ts,
+              category, provider, server, domain, NULL::text AS nsid,
+              bool_and(ok) AS ok,
+              min(error) FILTER (WHERE NOT ok) AS error
+       FROM cells
+       GROUP BY b_lo, category, provider, server, domain
+       ORDER BY run_id`,
+      [String(startMs), String(endMs), nb, source],
+    );
+    // Every bucket boundary is part of the x-axis (even spacing), so empty
+    // buckets render as gaps instead of collapsing the timeline.
+    const runs = [];
+    for (let g = 0; g < nb; g++) runs.push(startMs + Math.floor(((endMs - startMs) * g) / nb));
+    return rowsToHistory(runs, rows.map(r => ({ ...r, run_id: Number(r.run_id), ms: null })));
+  } finally {
+    client.release();
+  }
+}
+
 async function getHistory(limit, source = 'hosted', beforeMs = null) {
+  if (limit > WIDE_SPAN_THRESHOLD) return getHistorySummaryGrid(limit, source, beforeMs);
   if (source === 'contributor') return getContributorHistory(limit, beforeMs);
 
   const client = await pool().connect();
