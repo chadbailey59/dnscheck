@@ -1,9 +1,9 @@
 'use strict';
 
-const CO_DOMAINS  = ['daily.co', 'huggingface.co', 'hinge.co', 'g.co'];
-const COM_DOMAINS = ['google.com', 'github.com', 'cloudflare.com', 'amazon.com'];
-const NET_DOMAINS = ['speedtest.net', 'fastly.net', 'cloudflare.net', 'akamai.net'];
-const ORG_DOMAINS = ['wikipedia.org', 'mozilla.org', 'archive.org', 'ietf.org'];
+const CO_DOMAINS  = ['daily.co'];
+const COM_DOMAINS = ['dailywebrtc.com'];
+const NET_DOMAINS = ['dailywebrtc.net'];
+const ORG_DOMAINS = [];
 
 // Recursive resolvers get all domains so cross-TLD comparison is possible.
 const ALL_DOMAINS = [...CO_DOMAINS, ...COM_DOMAINS, ...NET_DOMAINS, ...ORG_DOMAINS];
@@ -39,12 +39,6 @@ const DNS_SERVERS = [
   { server: 'b.gtld-servers.net', category: 'authoritative', provider: '.net gTLD', tld: 'net' },
   { server: 'c.gtld-servers.net', category: 'authoritative', provider: '.net gTLD', tld: 'net' },
   { server: 'd.gtld-servers.net', category: 'authoritative', provider: '.net gTLD', tld: 'net' },
-
-  // ── Authoritative: .org TLD (Public Interest Registry / Afilias) ─────────
-  { server: 'a0.org.afilias-nst.info', category: 'authoritative', provider: '.org PIR', tld: 'org' },
-  { server: 'a2.org.afilias-nst.info', category: 'authoritative', provider: '.org PIR', tld: 'org' },
-  { server: 'b0.org.afilias-nst.info', category: 'authoritative', provider: '.org PIR', tld: 'org' },
-  { server: 'b2.org.afilias-nst.info', category: 'authoritative', provider: '.org PIR', tld: 'org' },
 
   // ── Third-party (public resolvers) ───────────────────────────────────────
   { server: '1.1.1.1',           category: 'third_party', provider: 'Cloudflare' },
