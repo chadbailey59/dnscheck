@@ -2,6 +2,7 @@
 
 const { initDb } = require('./db');
 const { startPoller } = require('./poller');
+const { startMaintenance } = require('./maintenance');
 const { createApp } = require('./api');
 
 const PORT = parseInt(process.env.PORT ?? '8766', 10);
@@ -13,6 +14,9 @@ async function main() {
 
   startPoller(INTERVAL_MS);
   console.log(`Poller started (interval=${INTERVAL_MS}ms)`);
+
+  startMaintenance();
+  console.log('Retention maintenance scheduled');
 
   const app = createApp();
   app.listen(PORT, '0.0.0.0', () => {

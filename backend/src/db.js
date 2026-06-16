@@ -72,6 +72,33 @@ async function initDb() {
       SET run_id = (EXTRACT(EPOCH FROM date_trunc('minute', ts)) * 1000)::BIGINT
       WHERE source = 'contributor'
         AND run_id <> (EXTRACT(EPOCH FROM date_trunc('minute', ts)) * 1000)::BIGINT;
+
+      -- Run-length-encoded long-term store. One row per maximal streak of
+      -- constant ok-state for a given anycast-instance series. Raw probes age
+      -- out after a short window (see maintenance.js); these segments are kept
+      -- indefinitely. Latency is intentionally dropped; modal error is kept for
+      -- ok=false segments only.
+      CREATE TABLE IF NOT EXISTS probes_summary (
+        id           BIGSERIAL PRIMARY KEY,
+        source       TEXT        NOT NULL,
+        category     TEXT        NOT NULL,
+        provider     TEXT        NOT NULL,
+        server       TEXT        NOT NULL,
+        domain       TEXT        NOT NULL,
+        nsid         TEXT,
+        ok           BOOLEAN     NOT NULL,
+        start_run_id BIGINT      NOT NULL,
+        end_run_id   BIGINT      NOT NULL,
+        start_ts     TIMESTAMPTZ NOT NULL,
+        end_ts       TIMESTAMPTZ NOT NULL,
+        observations INTEGER     NOT NULL,
+        error        TEXT
+      );
+      -- One open (most-recent) segment per series, used to extend a streak that
+      -- spans a sealing boundary. nsid normalised so NULL collides predictably.
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_summary_series_end
+        ON probes_summary(source, category, provider, server, domain, COALESCE(nsid,''), end_run_id);
+      CREATE INDEX IF NOT EXISTS idx_summary_source_ts ON probes_summary(source, start_ts, end_ts);
     `);
   } finally {
     client.release();
@@ -306,4 +333,4 @@ async function getContributorSummary(minutes = 60, beforeMs = null) {
   }
 }
 
-module.exports = { initDb, insertProbes, getLatest, getHistory, getContributorSummary };
+module.exports = { initDb, insertProbes, getLatest, getHistory, getContributorSummary, pool };
