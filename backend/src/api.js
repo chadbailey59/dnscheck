@@ -6,6 +6,7 @@ const { getLatest, getHistory, getContributorSummary, insertProbes } = require('
 const { DNS_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, SAMPLE_DOMAINS, CONTROL_DOMAIN } = require('./config');
 
 const MAX_UPLOAD_ROWS = parseInt(process.env.MAX_UPLOAD_ROWS ?? '1000', 10);
+const ALLOWED_DOMAINS = new Set(ALL_DOMAINS);
 const CATEGORIES = new Set(['authoritative', 'third_party', 'isp']);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -132,15 +133,21 @@ function createApp() {
       return;
     }
 
+    // Only ingest the domains this deployment tracks — stale contributor builds
+    // may still submit retired domains, and we don't want them back in the DB.
+    const submitted = upload.rows.length;
+    const rows = upload.rows.filter(r => ALLOWED_DOMAINS.has(r.domain));
+
     try {
-      const inserted = await insertProbes(upload.rows);
+      const inserted = (await insertProbes(rows)) || 0;
       res.status(201).json({
         ok: true,
         run_id: String(upload.run_id),
         contributor_id: upload.contributor_id,
         upload_id: upload.upload_id,
         inserted,
-        submitted: upload.rows.length,
+        submitted,
+        skipped: submitted - rows.length,
       });
     } catch (e) {
       console.error(e);
