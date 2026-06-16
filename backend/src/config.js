@@ -79,4 +79,11 @@ const POLL_SERVERS = EXCLUDE_PROVIDERS.size > 0
   ? DNS_SERVERS.filter(s => !EXCLUDE_PROVIDERS.has(s.provider))
   : DNS_SERVERS;
 
-module.exports = { DNS_SERVERS, POLL_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, TIMEOUT_SECS };
+// Loopback / local-stub resolvers (e.g. systemd-resolved's 127.0.0.53) are
+// meaningless to other observers, so we neither probe nor ingest them.
+function isLoopbackServer(server) {
+  const s = String(server ?? '').trim().toLowerCase();
+  return s.startsWith('127.') || s === '::1' || s === 'localhost' || s === '0.0.0.0';
+}
+
+module.exports = { DNS_SERVERS, POLL_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, TIMEOUT_SECS, isLoopbackServer };

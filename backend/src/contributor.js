@@ -3,7 +3,7 @@
 const dns = require('dns');
 const { randomUUID } = require('crypto');
 const { execFile } = require('child_process');
-const { ALL_DOMAINS } = require('./config');
+const { ALL_DOMAINS, isLoopbackServer } = require('./config');
 const { probe } = require('./poller');
 const { OTHER_PROVIDER, findResolverGroup, findResolverGroups, isOtherProvider, listProviderNames } = require('./ispResolvers');
 
@@ -120,8 +120,11 @@ function normalizeResolverServer(server) {
 }
 
 function systemResolverServers() {
-  const servers = unique(dns.getServers().map(normalizeResolverServer));
-  return servers.length > 0 ? servers : ['default'];
+  // Skip loopback stubs (127.0.0.53 etc.) — they only resolve for this host and
+  // are noise to everyone else.
+  const servers = unique(dns.getServers().map(normalizeResolverServer))
+    .filter(s => s && !isLoopbackServer(s));
+  return servers;
 }
 
 function otherResolverGroup() {
@@ -202,6 +205,11 @@ async function sleepUntilNextInterval(intervalMs) {
 async function runBatch(group, domains, id) {
   const ts = new Date().toISOString();
   const uploadId = randomUUID();
+
+  if (group.servers.length === 0) {
+    console.log('No usable resolvers for this group (loopback/local stubs are skipped); nothing to upload.');
+    return;
+  }
 
   console.log(`Upload ID: ${uploadId}.`);
   console.log(`Probing ${group.servers.length} resolver${group.servers.length === 1 ? '' : 's'} x ${domains.length} domain${domains.length === 1 ? '' : 's'}.`);

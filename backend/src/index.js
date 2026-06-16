@@ -1,6 +1,6 @@
 'use strict';
 
-const { initDb, enforceDomainAllowlist } = require('./db');
+const { initDb, enforceDataPolicy } = require('./db');
 const { startPoller } = require('./poller');
 const { startMaintenance } = require('./maintenance');
 const { createApp } = require('./api');
@@ -13,9 +13,9 @@ async function main() {
   await initDb();
   console.log('DB ready');
 
-  const removed = await enforceDomainAllowlist(ALL_DOMAINS);
+  const removed = await enforceDataPolicy(ALL_DOMAINS);
   if (removed.probes || removed.summary) {
-    console.log(`Domain allowlist enforced: removed ${removed.probes} probes, ${removed.summary} segments (vacuumed)`);
+    console.log(`Data policy enforced: removed ${removed.probes} probes, ${removed.summary} segments (vacuumed)`);
   }
 
   startPoller(INTERVAL_MS);

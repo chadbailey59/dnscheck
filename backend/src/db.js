@@ -105,16 +105,18 @@ async function initDb() {
   }
 }
 
-// One-time-on-startup enforcement of the tracked-domain allowlist: removes any
-// probes/segments for domains this deployment no longer tracks (e.g. retired
-// after a config change, or slipped in before the ingest filter shipped). Cheap
-// no-op once clean; only VACUUM FULLs when it actually removed something. Runs in
-// the main app process — reliable where one-off jobs proved not to be.
-async function enforceDomainAllowlist(domains) {
+// One-time-on-startup data-policy enforcement: removes any probes/segments this
+// deployment no longer wants — domains outside the allowlist (retired after a
+// config change, or slipped in before the ingest filter shipped) and loopback/
+// local-stub resolvers (127.0.0.53 etc.). Cheap no-op once clean; only VACUUM
+// FULLs when it actually removed something. Runs in the main app process —
+// reliable where one-off jobs proved not to be.
+async function enforceDataPolicy(domains) {
   const client = await pool().connect();
   try {
-    const a = await client.query('DELETE FROM probes         WHERE domain <> ALL($1)', [domains]);
-    const b = await client.query('DELETE FROM probes_summary WHERE domain <> ALL($1)', [domains]);
+    const where = `domain <> ALL($1) OR server LIKE '127.%' OR server IN ('::1','localhost','0.0.0.0')`;
+    const a = await client.query(`DELETE FROM probes         WHERE ${where}`, [domains]);
+    const b = await client.query(`DELETE FROM probes_summary WHERE ${where}`, [domains]);
     const removed = (a.rowCount || 0) + (b.rowCount || 0);
     if (removed > 0) {
       await client.query('VACUUM FULL ANALYZE probes');
@@ -419,4 +421,4 @@ async function getContributorSummary(minutes = 60, beforeMs = null) {
   }
 }
 
-module.exports = { initDb, insertProbes, getLatest, getHistory, getContributorSummary, enforceDomainAllowlist, pool };
+module.exports = { initDb, insertProbes, getLatest, getHistory, getContributorSummary, enforceDataPolicy, pool };

@@ -3,7 +3,7 @@
 const express = require('express');
 const path = require('path');
 const { getLatest, getHistory, getContributorSummary, insertProbes } = require('./db');
-const { DNS_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, SAMPLE_DOMAINS, CONTROL_DOMAIN } = require('./config');
+const { DNS_SERVERS, ALL_DOMAINS, DOMAINS_BY_TLD, SAMPLE_DOMAINS, CONTROL_DOMAIN, isLoopbackServer } = require('./config');
 
 const MAX_UPLOAD_ROWS = parseInt(process.env.MAX_UPLOAD_ROWS ?? '1000', 10);
 const ALLOWED_DOMAINS = new Set(ALL_DOMAINS);
@@ -133,10 +133,11 @@ function createApp() {
       return;
     }
 
-    // Only ingest the domains this deployment tracks — stale contributor builds
-    // may still submit retired domains, and we don't want them back in the DB.
+    // Only ingest the domains this deployment tracks, and never loopback/local
+    // resolvers — stale contributor builds may still submit retired domains or
+    // their 127.0.0.53 stub, and we don't want them back in the DB.
     const submitted = upload.rows.length;
-    const rows = upload.rows.filter(r => ALLOWED_DOMAINS.has(r.domain));
+    const rows = upload.rows.filter(r => ALLOWED_DOMAINS.has(r.domain) && !isLoopbackServer(r.server));
 
     try {
       const inserted = (await insertProbes(rows)) || 0;
